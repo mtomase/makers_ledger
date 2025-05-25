@@ -26,7 +26,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Helper Functions for Data Handling ---
+# --- Helper Functions for Data Handling --- (Keep as is from v2.9)
 def load_json_data(file_path, default_data=None):
     if default_data is None: default_data = {}
     try:
@@ -47,7 +47,8 @@ def parse_ingredient_display_string(display_string):
     if match: return match.group(1), match.group(2)
     return display_string, None
 
-# --- Load Global and Product Data ---
+
+# --- Load Global and Product Data --- (Keep as is from v2.9)
 DEFAULT_GLOBAL_DATA = {
     "ingredients": [
         {"name": "Distilled Water", "provider": "AquaPure Inc.", "price_per_unit": 1.39, "unit_quantity_kg": 8.3, "price_url": "https://example.com/water"},
@@ -69,13 +70,12 @@ DEFAULT_GLOBAL_DATA = {
     "global_salaries": [ {"employee_name": "Owner", "monthly_amount": 5000.0} ]
 }
 global_data = load_json_data(GLOBAL_DATA_FILE_PATH, DEFAULT_GLOBAL_DATA)
-# Migration and default key checks
 data_migrated = False
-for key, default_value_list in DEFAULT_GLOBAL_DATA.items():
+for key, default_value_list_or_dict in DEFAULT_GLOBAL_DATA.items(): # Renamed for clarity
     if key not in global_data:
-        global_data[key] = default_value_list
+        global_data[key] = default_value_list_or_dict
         data_migrated = True
-    if key == "ingredients":
+    if key == "ingredients" and isinstance(global_data.get(key), list): # Check type
         for item in global_data.get(key, []):
             if "price_url" not in item:
                 item["price_url"] = ""
@@ -84,19 +84,58 @@ for key, default_value_list in DEFAULT_GLOBAL_DATA.items():
         new_salaries = []
         for old_salary_entry in global_data[key]:
             emp_name_to_use = old_salary_entry.get("salary_name")
-            if "employees" in global_data:
+            if "employees" in global_data and isinstance(global_data["employees"], list): # Check type
                 for emp in global_data["employees"]:
-                    if emp.get("name") == old_salary_entry.get("salary_name"): emp_name_to_use = emp.get("name"); break
+                    if isinstance(emp, dict) and emp.get("name") == old_salary_entry.get("salary_name"): 
+                        emp_name_to_use = emp.get("name")
+                        break
             new_salaries.append({"employee_name": emp_name_to_use, "monthly_amount": old_salary_entry.get("monthly_amount", 0.0)})
         global_data[key] = new_salaries
         data_migrated = True
 
-if data_migrated: # Save only if changes were made during loading/migration
+if data_migrated:
     save_json_data(GLOBAL_DATA_FILE_PATH, global_data)
 
 saved_products = load_json_data(SAVED_PRODUCTS_FILE_PATH, {})
 
 st.title("📦 Product Cost Calculator")
+
+# --- Callback Function for Product Initialization ---
+def initialize_product_callback():
+    product_to_init = st.session_state.new_product_name_input_widget.strip()
+    
+    if not product_to_init:
+        # Use a session state flag for warnings/errors to display after rerun
+        st.session_state.form_message = ("warning", "Product name cannot be empty.")
+        return 
+    if product_to_init in saved_products:
+        st.session_state.form_message = ("warning", "Product name already exists.")
+        return
+
+    # Product initialization logic
+    new_product_data = {
+        "product_name": product_to_init, "batch_size_items": 100, "materials_used": [],
+        "production_tasks_performed": [], "shipping_tasks_performed": [],
+        "salary_allocation": {"employee_name_for_salary": "None", "items_per_month_for_salary": 1000},
+        "rent_utilities_allocation": {"items_per_month_for_rent": 1000},
+        "packaging": {"label_cost_per_item": 0.05, "materials_cost_per_item": 0.10},
+        "retail_fees": {"average_order_value": 30.00, "cc_fee_percent": 0.03, "platform_fee_percent": 0.05, "shipping_cost_paid_by_you": 5.0},
+        "wholesale_fees": {"average_order_value": 200.00, "commission_percent": 0.15, "processing_fee_percent": 0.02, "flat_fee_per_order": 0.25},
+        "pricing": {"wholesale_price_per_item": 5.00, "retail_price_per_item": 10.00, "buffer_percentage": 0.10},
+        "distribution": {"wholesale_percentage": 0.5, "retail_percentage": 0.5},
+        "monthly_production_items": 1000, "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    saved_products[product_to_init] = new_product_data 
+    save_json_data(SAVED_PRODUCTS_FILE_PATH, saved_products) 
+    
+    # Set session state for next rerun
+    st.session_state.current_product_name = product_to_init
+    st.session_state.load_saved_product = True 
+    st.session_state.new_product_cb = False  # This will make the checkbox unchecked on next run
+    st.session_state.new_product_name_input_widget = "My New Product" # Reset input for next time
+    
+    st.session_state.form_message = ("success", f"Product '{product_to_init}' initialized.")
+
 
 # --- Sidebar ---
 with st.sidebar:
@@ -105,89 +144,63 @@ with st.sidebar:
 
     if app_mode == "Manage Products":
         st.subheader("Products")
-        product_names = list(saved_products.keys())
+        product_names = list(saved_products.keys()) # Get fresh list
 
-        # Initialize session state keys for "Create New Product" UI if they don't exist
         if 'new_product_cb' not in st.session_state:
             st.session_state.new_product_cb = False
         if 'new_product_name_input_widget' not in st.session_state:
-            st.session_state.new_product_name_input_widget = "My New Product" # Default input value
+            st.session_state.new_product_name_input_widget = "My New Product"
+        
+        # Display any form messages set by callbacks
+        if 'form_message' in st.session_state and st.session_state.form_message:
+            msg_type, msg_content = st.session_state.form_message
+            if msg_type == "success":
+                st.success(msg_content)
+            elif msg_type == "warning":
+                st.warning(msg_content)
+            elif msg_type == "error":
+                st.error(msg_content)
+            del st.session_state.form_message # Clear after displaying
 
-        new_product_checkbox = st.checkbox("Create New Product", key="new_product_cb")
+        # Checkbox value is now directly from session state, which callback can modify
+        st.checkbox("Create New Product", key="new_product_cb") 
 
-        if new_product_checkbox:
+        if st.session_state.new_product_cb: # If checkbox is checked
             st.text_input(
                 "New Product Name",
-                key="new_product_name_input_widget" # Value is managed by st.session_state.new_product_name_input_widget
+                key="new_product_name_input_widget"
             )
-            # This line is not strictly necessary as load_saved_product is handled by the selectbox logic too
-            # but ensures it's False when the "new product" UI is active.
-            st.session_state.load_saved_product = False 
-
-            if st.button("Initialize New Product", key="init_new_prod_btn"):
-                product_to_init = st.session_state.new_product_name_input_widget.strip()
-                
-                if not product_to_init: 
-                    st.warning("Product name cannot be empty.")
-                elif product_to_init in saved_products: 
-                    st.warning("Product name already exists.")
-                else:
-                    saved_products[product_to_init] = {
-                        "product_name": product_to_init, "batch_size_items": 100, "materials_used": [],
-                        "production_tasks_performed": [], "shipping_tasks_performed": [],
-                        "salary_allocation": {"employee_name_for_salary": "None", "items_per_month_for_salary": 1000},
-                        "rent_utilities_allocation": {"items_per_month_for_rent": 1000},
-                        "packaging": {"label_cost_per_item": 0.05, "materials_cost_per_item": 0.10},
-                        "retail_fees": {"average_order_value": 30.00, "cc_fee_percent": 0.03, "platform_fee_percent": 0.05, "shipping_cost_paid_by_you": 5.0},
-                        "wholesale_fees": {"average_order_value": 200.00, "commission_percent": 0.15, "processing_fee_percent": 0.02, "flat_fee_per_order": 0.25},
-                        "pricing": {"wholesale_price_per_item": 5.00, "retail_price_per_item": 10.00, "buffer_percentage": 0.10},
-                        "distribution": {"wholesale_percentage": 0.5, "retail_percentage": 0.5},
-                        "monthly_production_items": 1000, "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    save_json_data(SAVED_PRODUCTS_FILE_PATH, saved_products)
-                    st.success(f"Product '{product_to_init}' initialized.")
-                    st.session_state.current_product_name = product_to_init
-                    st.session_state.load_saved_product = True # Flag to load this product in main area
-
-                    # Reset UI state for creating new product
-                    st.session_state.new_product_cb = False 
-                    st.session_state.new_product_name_input_widget = "My New Product" # Reset for next time
-                    
-                    st.rerun()
-        else: # new_product_checkbox is false - Product Selection Logic
+            st.button("Initialize New Product", key="init_new_prod_btn", on_click=initialize_product_callback)
+            # No st.rerun() here; on_click handles the flow.
+            st.session_state.load_saved_product = False # Ensure this is false when "new product" UI is active
+        
+        else: # Product Selection Logic (if checkbox is not checked)
             if product_names:
-                # Initialize current_product_name if not set or invalid
                 if 'current_product_name' not in st.session_state or st.session_state.current_product_name not in product_names:
                     st.session_state.current_product_name = product_names[0] if product_names else None
-                    # If current_product_name was just initialized, flag it to be loaded
                     if st.session_state.current_product_name is not None:
                          st.session_state.load_saved_product = True
-
 
                 selected_product_name_sidebar = st.selectbox(
                     "Select Product", 
                     product_names,
                     index=product_names.index(st.session_state.current_product_name) if st.session_state.current_product_name in product_names else 0,
-                    key="select_product_sidebar" # This key will hold the selected product name
+                    key="select_product_sidebar"
                 )
                 
-                # If selection changes, update current_product_name and trigger a rerun to load it
                 if selected_product_name_sidebar != st.session_state.current_product_name:
                     st.session_state.current_product_name = selected_product_name_sidebar
                     st.session_state.load_saved_product = True
-                    st.rerun()
-                # If load_saved_product is not in session_state but a product is selected, set it to true (for initial load)
+                    st.rerun() 
                 elif 'load_saved_product' not in st.session_state and st.session_state.current_product_name is not None:
                     st.session_state.load_saved_product = True
-
-            else: # No product names
+            else: 
                 st.info("No saved products. Tick 'Create New Product' to start.")
-                st.session_state.load_saved_product = False # Ensure this is false if no products
+                st.session_state.load_saved_product = False 
                 if 'current_product_name' in st.session_state: 
                     del st.session_state.current_product_name
 
-
-# --- Tutorial Tab ---
+# --- Tutorial Tab --- (Keep as is from v2.9)
 if app_mode == "Tutorial":
     st.header("📖 Application Tutorial")
     st.markdown("""
@@ -319,7 +332,7 @@ if app_mode == "Tutorial":
     You can back up these files. If you move the application or want to share the data, copy these files.
     """)
 
-# --- Global Data Management UI ---
+# --- Global Data Management UI --- (Keep as is from v2.9)
 elif app_mode == "Manage Global Data":
     st.header("🌍 Manage Global Data")
     st.info("Define shared resources like ingredients, employees, and global costs here.")
@@ -341,7 +354,6 @@ elif app_mode == "Manage Global Data":
     with tab_ingr:
         st.subheader("Global Ingredient List")
         current_ingredients_data = global_data.get("ingredients", [])
-        # Ensure all items have the new key, even if loaded from an old file
         for item in current_ingredients_data: 
             if "price_url" not in item: item["price_url"] = ""
         
@@ -358,7 +370,7 @@ elif app_mode == "Manage Global Data":
                 ingr_rename_map["unit_quantity_kg"]: st.column_config.NumberColumn(help="E.g., if price is for a 5kg bag, enter 5.",format="%.3f",required=True,min_value=0.001),
                 ingr_rename_map["price_url"]: st.column_config.LinkColumn(
                     help="Link to ingredient purchasing page. Will display as clickable URL.", 
-                    validate=r"^https?://[^\s/$.?#].[^\s]*$" # Raw string for regex
+                    validate=r"^https?://[^\s/$.?#].[^\s]*$" 
                 )
             },
             num_rows="dynamic", key="global_ingredients_editor_v3")
@@ -405,7 +417,7 @@ elif app_mode == "Manage Global Data":
         if not isinstance(cg_costs, dict): cg_costs = DEFAULT_GLOBAL_DATA["global_costs"]
         n_rent = st.number_input("Global Monthly Rent (€)",value=float(cg_costs.get("monthly_rent",0.0)),min_value=0.0,format="%.2f")
         n_util = st.number_input("Global Monthly Utilities (€)",value=float(cg_costs.get("monthly_utilities",0.0)),min_value=0.0,format="%.2f")
-        if st.button("Save Global Overheads",key="s_g_oh_v2"): global_data["global_costs"]={"monthly_rent":n_rent,"monthly_utilities":n_util}; save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Global overheads saved!") # No rerun needed
+        if st.button("Save Global Overheads",key="s_g_oh_v2"): global_data["global_costs"]={"monthly_rent":n_rent,"monthly_utilities":n_util}; save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Global overheads saved!") 
     with tab_gsal:
         st.subheader("Global Salaries (Linked to Employees)")
         employee_names_for_salary_dropdown = [emp.get("name") for emp in global_data.get("employees", []) if emp.get("name")]
@@ -429,18 +441,15 @@ elif app_mode == "Manage Global Data":
             global_data["global_salaries"]=valid_salaries
             save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Global salaries saved!"); st.rerun()
 
-# --- Product Management UI ---
+# --- Product Management UI --- (Keep as is from v2.9, with its internal logic for tabs)
 elif app_mode == "Manage Products" and 'current_product_name' in st.session_state and st.session_state.current_product_name:
     product_name = st.session_state.current_product_name
     
-    # Ensure product_name is valid and exists after a potential rerun
     if product_name not in saved_products: 
-        # This can happen if a product was deleted or if there's a state mismatch
         st.warning(f"Product '{product_name}' may no longer exist or an error occurred. Please select a product or create a new one.")
-        # Reset relevant session state to avoid further errors in this run
         if 'current_product_name' in st.session_state: del st.session_state.current_product_name
         st.session_state.load_saved_product = False
-        st.rerun() # Rerun to refresh sidebar and product list
+        st.rerun() 
     else:
         product_data = saved_products[product_name]
         st.header(f"📝 Managing Product: {product_name}")
@@ -465,7 +474,6 @@ elif app_mode == "Manage Products" and 'current_product_name' in st.session_stat
             df_mats_orig = pd.DataFrame(current_mats_list)
             if df_mats_orig.empty: 
                 df_mats_orig = pd.DataFrame(columns=list(mat_used_inv_rename_map.values()))
-            # Add a default row if the df is empty AND options exist
             if df_mats_orig.empty and ingr_display_opts[0] != "No ingredients (with provider) defined globally":
                  df_mats_orig = pd.DataFrame([{"ingredient_display_name": ingr_display_opts[0], "quantity_grams_used":0.0}])
 
@@ -477,7 +485,7 @@ elif app_mode == "Manage Products" and 'current_product_name' in st.session_stat
                 num_rows="dynamic",key=f"{product_name}_mats_ed_v2")
             
             product_data['materials_used'] = edited_mats_df.rename(columns=mat_used_inv_rename_map).to_dict("records")
-            product_data['materials_used'] = [r for r in product_data['materials_used'] if r.get("ingredient_display_name") and r.get("ingredient_display_name") != "No ingredients (with provider) defined globally" and r.get("quantity_grams_used") is not None and float(r.get("quantity_grams_used", 0.0)) > 0] # check for None
+            product_data['materials_used'] = [r for r in product_data['materials_used'] if r.get("ingredient_display_name") and r.get("ingredient_display_name") != "No ingredients (with provider) defined globally" and r.get("quantity_grams_used") is not None and float(r.get("quantity_grams_used", 0.0)) > 0] 
             total_mats_cost_for_prod=0.0
             if product_data['materials_used'] and g_ingr_list:
                 temp_cost_list = []
@@ -516,7 +524,7 @@ elif app_mode == "Manage Products" and 'current_product_name' in st.session_stat
                     task_perf_rename_map["items_processed_in_task"]:st.column_config.NumberColumn(format="%d",required=True,min_value=1)},
                 num_rows="dynamic",key=f"{product_name}_prod_tsk_ed_v2")
             product_data['production_tasks_performed']=edited_prod_tsk_df.rename(columns=task_perf_inv_rename_map).to_dict("records")
-            product_data['production_tasks_performed'] = [r for r in product_data['production_tasks_performed'] if r.get("task_name") and r.get("employee_name") and r.get("time_minutes") is not None and r.get("items_processed_in_task") is not None and r.get("task_name")!="No prod tasks defined" and r.get("employee_name")!="No employees defined globally" and float(r.get("time_minutes",0.0)) >= 0 and int(r.get("items_processed_in_task",0)) > 0 ] # Allow 0 time if items > 0
+            product_data['production_tasks_performed'] = [r for r in product_data['production_tasks_performed'] if r.get("task_name") and r.get("employee_name") and r.get("time_minutes") is not None and r.get("items_processed_in_task") is not None and r.get("task_name")!="No prod tasks defined" and r.get("employee_name")!="No employees defined globally" and float(r.get("time_minutes",0.0)) >= 0 and int(r.get("items_processed_in_task",0)) > 0 ] 
             if product_data['production_tasks_performed'] and not g_emp_df.empty:
                 emp_rate_lookup=dict(zip(g_emp_df["name"],g_emp_df["hourly_rate"].astype(float)))
                 prod_lab_cost_pi=sum([(float(r.get("time_minutes",0))/60*emp_rate_lookup.get(r.get("employee_name"),0))/int(r.get("items_processed_in_task",1) or 1) for r in product_data['production_tasks_performed']])
@@ -566,7 +574,7 @@ elif app_mode == "Manage Products" and 'current_product_name' in st.session_stat
             st.markdown("#### Rent & Utilities Allocation")
             items_for_rent_alloc=st.number_input("Items of THIS Product per Month (for rent/utilities)",value=int(product_data.get("rent_utilities_allocation",{}).get("items_per_month_for_rent",1000)),min_value=1,key=f"{product_name}_items_for_rent")
             product_data["rent_utilities_allocation"]={"items_per_month_for_rent":items_for_rent_alloc}
-            rent_util_cost_pi = 0.0 # Initialize
+            rent_util_cost_pi = 0.0 
             if items_for_rent_alloc>0:
                 g_rent=float(global_data.get("global_costs",{}).get("monthly_rent",0)); g_util=float(global_data.get("global_costs",{}).get("monthly_utilities",0))
                 rent_util_cost_pi=(g_rent+g_util)/items_for_rent_alloc
@@ -624,7 +632,7 @@ elif app_mode == "Manage Products" and 'current_product_name' in st.session_stat
                 "Profit/Item (€)":[ws_prof,rt_prof],"Profit Margin (%)":[ws_marg*100,rt_marg*100]})
             st.dataframe(prof_df.style.format({"Price/Item (€)":"€{:.2f}","Final Cost/Item (€)":"€{:.2f}","Fees/Item (Est.) (€)":"€{:.2f}","Profit/Item (€)":"€{:.2f}","Profit Margin (%)":"{:.1f}%"}))
             st.markdown("#### Revenue and Profit Projection")
-            mpi_key=f"{product_name}_monthly_prod_items_v7" # Incremented key
+            mpi_key=f"{product_name}_monthly_prod_items_v7" 
             product_data["monthly_production_items"]=st.number_input("Monthly Production (Items)",value=int(product_data.get("monthly_production_items",1000)),min_value=1,key=mpi_key)
             ann_prod=product_data["monthly_production_items"]*12
             c_dist=product_data.get("distribution",{})
@@ -641,7 +649,7 @@ elif app_mode == "Manage Products" and 'current_product_name' in st.session_stat
             st.dataframe(proj_df.style.format({"Annual Items":"{:,.0f}","Annual Revenue (€)":"€{:,.2f}","Annual Profit (€)":"€{:,.2f}"}))
             st.metric("Overall Annual Profit Margin",f"{overall_marg_yr:.1%}")
 
-        if st.button(f"Save Product: {product_name}",key=f"save_{product_name}_v2"): # Incremented key
+        if st.button(f"Save Product: {product_name}",key=f"save_{product_name}_v2"): 
             product_data["last_updated"]=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             saved_products[product_name]=product_data
             save_json_data(SAVED_PRODUCTS_FILE_PATH,saved_products)
@@ -649,6 +657,13 @@ elif app_mode == "Manage Products" and 'current_product_name' in st.session_stat
 
 elif app_mode=="Manage Products" and not ('current_product_name' in st.session_state and st.session_state.current_product_name):
     st.info("Select a product from the sidebar to edit, or create a new one.")
+    # Display any residual form messages if user navigates away before it's cleared
+    if 'form_message' in st.session_state and st.session_state.form_message:
+        msg_type, msg_content = st.session_state.form_message
+        if msg_type == "success": st.success(msg_content)
+        elif msg_type == "warning": st.warning(msg_content)
+        del st.session_state.form_message
+
 
 if app_mode != "Tutorial":
-    st.markdown("---"); st.markdown("Product Cost Calculator v2.9 - Session State Init Fix, Regex Fix, Price URL")
+    st.markdown("---"); st.markdown("Product Cost Calculator v2.10 - Callback for Product Init")
