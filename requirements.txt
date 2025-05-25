@@ -1,0 +1,10 @@
+# requirements.txt
+streamlit
+streamlit-authenticator>=0.3.0
+sqlalchemy
+psycopg2-binary
+passlib
+PyYAML
+python-dotenv # Add this line if it's missing
+pandas
+numpy

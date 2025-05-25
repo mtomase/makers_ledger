@@ -1,669 +1,720 @@
+# app.py
 import streamlit as st
+import streamlit_authenticator as stauth
+import yaml
+from yaml.loader import SafeLoader
+import os
 import pandas as pd
 import numpy as np
-import json
-import os
+# import json # No longer needed for primary data storage
 from datetime import datetime
 import re
+from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.exc import SQLAlchemyError
 
-# --- Configuration for File Paths ---
-BASE_DIR = "data_files_product_cost_app" 
+# --- Authentication & DB Imports ---
+from models import (
+    init_db_structure, get_db, User, UserLayout,
+    Ingredient, Employee, StandardProductionTask, StandardShippingTask,
+    GlobalCosts, GlobalSalary, Product, ProductMaterial,
+    ProductProductionTask, ProductShippingTask
+)
+from auth_utils import get_or_create_db_user
 
-GLOBAL_DATA_FILENAME = "global_data.json"
-SAVED_PRODUCTS_FILENAME = "saved_products.json"
+# --- Initialize Database Structure (from models.py) ---
+# This should ideally run once. models.py's init_db_structure handles table creation.
+if 'db_structure_initialized' not in st.session_state:
+    try:
+        # init_db_structure() # This creates tables. Run it manually via models.py or db_setup.py first.
+        # For the app, we just need to ensure the engine is ready.
+        # The init_db_structure() call is more for a setup phase.
+        # If you run this in app.py, ensure it's idempotent and safe.
+        # For Render, the tables should be created by db_setup.py or a migration tool.
+        st.session_state.db_structure_initialized = True # Assume tables exist
+        print("Database structure assumed to be initialized.")
+    except Exception as e:
+        st.error(f"Critical error related to database structure: {e}")
+        st.stop()
 
-if not os.path.exists(BASE_DIR):
-    os.makedirs(BASE_DIR, exist_ok=True)
+# --- Load streamlit-authenticator Configuration from YAML ---
+# (This part remains the same as before)
+try:
+    with open('config.yaml', 'r') as file:
+        config_auth = yaml.load(file, Loader=SafeLoader)
+except FileNotFoundError:
+    st.error("CRITICAL ERROR: config.yaml not found.")
+    st.stop()
+except yaml.YAMLError as e:
+    st.error(f"CRITICAL ERROR: Could not parse config.yaml: {e}")
+    st.stop()
+except Exception as e:
+    st.error(f"CRITICAL ERROR: An unexpected error occurred loading config.yaml: {e}")
+    st.stop()
 
-GLOBAL_DATA_FILE_PATH = os.path.join(BASE_DIR, GLOBAL_DATA_FILENAME)
-SAVED_PRODUCTS_FILE_PATH = os.path.join(BASE_DIR, SAVED_PRODUCTS_FILENAME)
-
-# --- Page Configuration ---
-st.set_page_config(
-    page_title="Product Cost Calculator",
-    page_icon="🏭",
-    layout="wide",
-    initial_sidebar_state="expanded"
+# --- Initialize Authenticator ---
+authenticator = stauth.Authenticate(
+    config_auth['credentials'],
+    config_auth['cookie']['name'],
+    config_auth['cookie']['key'],
+    config_auth['cookie']['expiry_days'],
+    config_auth.get('preauthorized')
 )
 
-# --- Helper Functions for Data Handling --- (Keep as is from v2.9)
-def load_json_data(file_path, default_data=None):
-    if default_data is None: default_data = {}
+# --- Render Login Form and Handle Authentication ---
+name, authentication_status, username = authenticator.login('Login', 'main')
+
+# --- Helper function to get a DB session (context manager might be better in long run) ---
+def get_db_session():
+    db = next(get_db())
+    return db
+
+# --- Conditional Page Config and App Logic ---
+if authentication_status is False:
+    # ... (login page config and error message as before) ...
+    if 'page_config_set' not in st.session_state or not st.session_state.page_config_set == "login":
+        try:
+            st.set_page_config(page_title="Login - PCC", layout="centered", initial_sidebar_state="collapsed")
+            st.session_state.page_config_set = "login"
+        except st.errors.StreamlitAPIException as e:
+            if "st.set_page_config() has already been called" not in str(e): raise e
+    st.error('Username/password is incorrect')
+
+
+elif authentication_status is None:
+    # ... (login page config and warning message as before) ...
+    if 'page_config_set' not in st.session_state or not st.session_state.page_config_set == "login":
+        try:
+            st.set_page_config(page_title="Login - PCC", layout="centered", initial_sidebar_state="collapsed")
+            st.session_state.page_config_set = "login"
+        except st.errors.StreamlitAPIException as e:
+            if "st.set_page_config() has already been called" not in str(e): raise e
+    st.warning('Please enter your username and password')
+    if st.checkbox("New user? Register here"):
+        try:
+            if authenticator.register_user('Register user', preauthorization=False):
+                st.success('User registered successfully! Please login.')
+        except Exception as e:
+            st.error(f"Registration error: {e}")
+
+
+elif authentication_status:
+    # --- User is Authenticated ---
+    st.session_state.username = username
+    st.session_state.name = name
+
+    db = get_db_session() # Get a database session for this authenticated block
     try:
-        with open(file_path, "r") as f: return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        if default_data: save_json_data(file_path, default_data)
-        return default_data
+        user_email_from_config = config_auth["credentials"]["usernames"].get(st.session_state["username"], {}).get("email", f"{st.session_state.username}@example.com")
+        db_user = get_or_create_db_user(
+            db=db,
+            username=st.session_state["username"],
+            email=user_email_from_config,
+            name=st.session_state["name"]
+        )
+        st.session_state.user_id = db_user.id
+        st.session_state.user_layout = db_user.layout_preference.value
+        st.session_state.db_user_object = db_user
 
-def save_json_data(file_path, data):
-    with open(file_path, "w") as f: json.dump(data, f, indent=4)
-
-def create_ingredient_display_string(name, provider):
-    return f"{name} (Provider: {provider})"
-
-def parse_ingredient_display_string(display_string):
-    if display_string is None: return None, None
-    match = re.match(r"^(.*?) \(Provider: (.*?)\)$", display_string)
-    if match: return match.group(1), match.group(2)
-    return display_string, None
-
-
-# --- Load Global and Product Data --- (Keep as is from v2.9)
-DEFAULT_GLOBAL_DATA = {
-    "ingredients": [
-        {"name": "Distilled Water", "provider": "AquaPure Inc.", "price_per_unit": 1.39, "unit_quantity_kg": 8.3, "price_url": "https://example.com/water"},
-        {"name": "Distilled Water", "provider": "Local Supply", "price_per_unit": 1.20, "unit_quantity_kg": 10.0, "price_url": ""},
-        {"name": "Sodium Hydroxide (Lye)", "provider": "ChemCo", "price_per_unit": 45.0, "unit_quantity_kg": 5.0, "price_url": "https://example.com/lye"},
-        {"name": "Olive Oil", "provider": "Olio Verde", "price_per_unit": 18.0, "unit_quantity_kg": 3.5, "price_url": ""},
-        {"name": "Olive Oil", "provider": "Bulk Oils Ltd.", "price_per_unit": 16.50, "unit_quantity_kg": 5.0, "price_url": ""},
-        {"name": "Coconut Oil", "provider": "TropicalHarvest", "price_per_unit": 22.0, "unit_quantity_kg": 4.0, "price_url": ""},
-        {"name": "Cocoa Butter", "provider": "ChocoSource", "price_per_unit": 15.0, "unit_quantity_kg": 2.0, "price_url": ""}
-    ],
-    "employees": [
-        {"name": "Owner", "hourly_rate": 20.0, "role": "Production Manager"},
-        {"name": "Employee 1", "hourly_rate": 18.0, "role": "Production Assistant"},
-        {"name": "Employee 2", "hourly_rate": 16.0, "role": "Shipping Manager"}
-    ],
-    "standard_production_tasks": [ {"task_name": "Unmold & Clean"}, {"task_name": "Cut Loaves"} ],
-    "standard_shipping_tasks": [ {"task_name": "Remove from Shelf"}, {"task_name": "Label"} ],
-    "global_costs": {"monthly_rent": 1500.0, "monthly_utilities": 250.0},
-    "global_salaries": [ {"employee_name": "Owner", "monthly_amount": 5000.0} ]
-}
-global_data = load_json_data(GLOBAL_DATA_FILE_PATH, DEFAULT_GLOBAL_DATA)
-data_migrated = False
-for key, default_value_list_or_dict in DEFAULT_GLOBAL_DATA.items(): # Renamed for clarity
-    if key not in global_data:
-        global_data[key] = default_value_list_or_dict
-        data_migrated = True
-    if key == "ingredients" and isinstance(global_data.get(key), list): # Check type
-        for item in global_data.get(key, []):
-            if "price_url" not in item:
-                item["price_url"] = ""
-                data_migrated = True
-    if key == "global_salaries" and global_data.get(key) and isinstance(global_data[key], list) and len(global_data[key]) > 0 and "salary_name" in global_data[key][0]:
-        new_salaries = []
-        for old_salary_entry in global_data[key]:
-            emp_name_to_use = old_salary_entry.get("salary_name")
-            if "employees" in global_data and isinstance(global_data["employees"], list): # Check type
-                for emp in global_data["employees"]:
-                    if isinstance(emp, dict) and emp.get("name") == old_salary_entry.get("salary_name"): 
-                        emp_name_to_use = emp.get("name")
-                        break
-            new_salaries.append({"employee_name": emp_name_to_use, "monthly_amount": old_salary_entry.get("monthly_amount", 0.0)})
-        global_data[key] = new_salaries
-        data_migrated = True
-
-if data_migrated:
-    save_json_data(GLOBAL_DATA_FILE_PATH, global_data)
-
-saved_products = load_json_data(SAVED_PRODUCTS_FILE_PATH, {})
-
-st.title("📦 Product Cost Calculator")
-
-# --- Callback Function for Product Initialization ---
-def initialize_product_callback():
-    product_to_init = st.session_state.new_product_name_input_widget.strip()
-    
-    if not product_to_init:
-        # Use a session state flag for warnings/errors to display after rerun
-        st.session_state.form_message = ("warning", "Product name cannot be empty.")
-        return 
-    if product_to_init in saved_products:
-        st.session_state.form_message = ("warning", "Product name already exists.")
-        return
-
-    # Product initialization logic
-    new_product_data = {
-        "product_name": product_to_init, "batch_size_items": 100, "materials_used": [],
-        "production_tasks_performed": [], "shipping_tasks_performed": [],
-        "salary_allocation": {"employee_name_for_salary": "None", "items_per_month_for_salary": 1000},
-        "rent_utilities_allocation": {"items_per_month_for_rent": 1000},
-        "packaging": {"label_cost_per_item": 0.05, "materials_cost_per_item": 0.10},
-        "retail_fees": {"average_order_value": 30.00, "cc_fee_percent": 0.03, "platform_fee_percent": 0.05, "shipping_cost_paid_by_you": 5.0},
-        "wholesale_fees": {"average_order_value": 200.00, "commission_percent": 0.15, "processing_fee_percent": 0.02, "flat_fee_per_order": 0.25},
-        "pricing": {"wholesale_price_per_item": 5.00, "retail_price_per_item": 10.00, "buffer_percentage": 0.10},
-        "distribution": {"wholesale_percentage": 0.5, "retail_percentage": 0.5},
-        "monthly_production_items": 1000, "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    saved_products[product_to_init] = new_product_data 
-    save_json_data(SAVED_PRODUCTS_FILE_PATH, saved_products) 
-    
-    # Set session state for next rerun
-    st.session_state.current_product_name = product_to_init
-    st.session_state.load_saved_product = True 
-    st.session_state.new_product_cb = False  # This will make the checkbox unchecked on next run
-    st.session_state.new_product_name_input_widget = "My New Product" # Reset input for next time
-    
-    st.session_state.form_message = ("success", f"Product '{product_to_init}' initialized.")
-
-
-# --- Sidebar ---
-with st.sidebar:
-    st.header("Navigation")
-    app_mode = st.radio("Choose a section:", ["Manage Products", "Manage Global Data", "Tutorial"])
-
-    if app_mode == "Manage Products":
-        st.subheader("Products")
-        product_names = list(saved_products.keys()) # Get fresh list
-
-        if 'new_product_cb' not in st.session_state:
-            st.session_state.new_product_cb = False
-        if 'new_product_name_input_widget' not in st.session_state:
-            st.session_state.new_product_name_input_widget = "My New Product"
-        
-        # Display any form messages set by callbacks
-        if 'form_message' in st.session_state and st.session_state.form_message:
-            msg_type, msg_content = st.session_state.form_message
-            if msg_type == "success":
-                st.success(msg_content)
-            elif msg_type == "warning":
-                st.warning(msg_content)
-            elif msg_type == "error":
-                st.error(msg_content)
-            del st.session_state.form_message # Clear after displaying
-
-        # Checkbox value is now directly from session state, which callback can modify
-        st.checkbox("Create New Product", key="new_product_cb") 
-
-        if st.session_state.new_product_cb: # If checkbox is checked
-            st.text_input(
-                "New Product Name",
-                key="new_product_name_input_widget"
-            )
-            st.button("Initialize New Product", key="init_new_prod_btn", on_click=initialize_product_callback)
-            # No st.rerun() here; on_click handles the flow.
-            st.session_state.load_saved_product = False # Ensure this is false when "new product" UI is active
-        
-        else: # Product Selection Logic (if checkbox is not checked)
-            if product_names:
-                if 'current_product_name' not in st.session_state or st.session_state.current_product_name not in product_names:
-                    st.session_state.current_product_name = product_names[0] if product_names else None
-                    if st.session_state.current_product_name is not None:
-                         st.session_state.load_saved_product = True
-
-                selected_product_name_sidebar = st.selectbox(
-                    "Select Product", 
-                    product_names,
-                    index=product_names.index(st.session_state.current_product_name) if st.session_state.current_product_name in product_names else 0,
-                    key="select_product_sidebar"
+        # --- Set Page Config for Authenticated User ---
+        if 'page_config_set' not in st.session_state or not st.session_state.page_config_set == "user_app":
+            try:
+                st.set_page_config(
+                    page_title="Product Cost Calculator",
+                    page_icon="🏭",
+                    layout=st.session_state.user_layout,
+                    initial_sidebar_state="expanded"
                 )
+                st.session_state.page_config_set = "user_app"
+                st.rerun()
+            except st.errors.StreamlitAPIException as e:
+                if "st.set_page_config() has already been called" not in str(e):
+                    st.warning(f"Could not set page config for user: {e}. Using defaults.")
+                st.session_state.page_config_set = "user_app"
+
+        # --- Application Logic (Now using Database) ---
+
+        # --- Sidebar for Authenticated User ---
+        st.sidebar.title(f"Welcome *{st.session_state['name']}*")
+        st.sidebar.caption(f"(User ID: {st.session_state.user_id})")
+        authenticator.logout('Logout', 'sidebar')
+        st.sidebar.markdown("---")
+
+        st.sidebar.header("Navigation")
+        app_mode = st.sidebar.radio("Choose a section:", ["Manage Products", "Manage Global Data", "Tutorial"])
+
+        # Layout Preference (from DB)
+        layout_options_enum = [layout.value for layout in UserLayout]
+        try:
+            current_layout_index_db = layout_options_enum.index(st.session_state.user_layout)
+        except ValueError:
+            current_layout_index_db = 0
+        new_layout_str_db = st.sidebar.selectbox(
+            "Set Page Layout:", options=layout_options_enum, index=current_layout_index_db, key="user_layout_selector_db"
+        )
+        if new_layout_str_db != st.session_state.user_layout:
+            if st.sidebar.button("Apply Layout Change", key="apply_layout_btn_db"):
+                try:
+                    user_to_update = db.query(User).filter(User.id == st.session_state.user_id).first()
+                    if user_to_update:
+                        user_to_update.layout_preference = UserLayout(new_layout_str_db)
+                        db.commit()
+                        st.session_state.user_layout = new_layout_str_db
+                        st.session_state.page_config_set = None
+                        st.success("Layout preference updated! Rerunning...")
+                        st.rerun()
+                except SQLAlchemyError as e_layout_db:
+                    db.rollback(); st.error(f"DB Error updating layout: {e_layout_db}")
+        st.sidebar.markdown("---")
+
+        # --- Main Application Title ---
+        st.title("📦 Product Cost Calculator (Database Mode)")
+
+        # --- Helper Functions for Data Display (parsing remains similar) ---
+        def create_ingredient_display_string(name, provider):
+            return f"{name} (Provider: {provider})"
+
+        def parse_ingredient_display_string(display_string):
+            if display_string is None: return None, None
+            match = re.match(r"^(.*?) \(Provider: (.*?)\)$", display_string)
+            if match: return match.group(1), match.group(2)
+            return display_string, None
+
+        # --- Data Column Rename Maps (for display in data_editor) ---
+        ingr_rename_map = {"name": "Ingredient Name", "provider": "Provider", "price_per_unit": "Price (€) for Unit", "unit_quantity_kg": "Unit Qty (kg)", "price_url": "Price URL", "id": "DB ID"}
+        emp_rename_map = {"name": "Employee Name", "hourly_rate": "Hourly Rate (€)", "role": "Role", "id": "DB ID"}
+        task_rename_map = {"task_name": "Task Name", "id": "DB ID"}
+        gsal_rename_map = {"employee_name_display": "Employee Name", "monthly_amount": "Monthly Salary (€)", "id": "DB ID"} # employee_name_display will be joined
+
+        # --- Tutorial Tab ---
+        if app_mode == "Tutorial":
+            # ... (Your full Tutorial tab content - no changes needed here) ...
+            st.header("📖 Application Tutorial")
+            st.markdown("Welcome to the Product Cost Calculator! ...") # Truncated
+
+        # --- Global Data Management UI (Database Version) ---
+        elif app_mode == "Manage Global Data":
+            st.header("🌍 Manage Global Data (from Database)")
+            st.info("Define shared resources. All data is specific to your user account.")
+            tab_ingr, tab_emp, tab_tsk, tab_gcost, tab_gsal = st.tabs(["Ingredients", "Employees", "Tasks", "Overheads", "Salaries"])
+            user_id = st.session_state.user_id
+
+            with tab_ingr:
+                st.subheader("Global Ingredient List")
+                try:
+                    ingredients_db = db.query(Ingredient).filter(Ingredient.user_id == user_id).order_by(Ingredient.name).all()
+                    ingr_df_data = [{"id": ing.id, "name": ing.name, "provider": ing.provider, "price_per_unit": ing.price_per_unit, "unit_quantity_kg": ing.unit_quantity_kg, "price_url": ing.price_url} for ing in ingredients_db]
+                    df_ingr_display = pd.DataFrame(ingr_df_data).rename(columns=ingr_rename_map)
+
+                    edited_ingr_df = st.data_editor(
+                        df_ingr_display,
+                        column_config={
+                            ingr_rename_map["id"]: st.column_config.NumberColumn(disabled=True, help="Database ID (cannot be changed)"),
+                            ingr_rename_map["name"]: st.column_config.TextColumn(required=True),
+                            ingr_rename_map["provider"]: st.column_config.TextColumn(required=True),
+                            ingr_rename_map["price_per_unit"]: st.column_config.NumberColumn(format="%.2f", required=True, min_value=0.0),
+                            ingr_rename_map["unit_quantity_kg"]: st.column_config.NumberColumn(format="%.3f", required=True, min_value=0.001),
+                            ingr_rename_map["price_url"]: st.column_config.LinkColumn(validate=r"^(https?://[^\s/$.?#].[^\s]*)?$") # Optional URL
+                        },
+                        num_rows="dynamic", key="global_ingredients_editor_db", hide_index=True
+                    )
+                    if st.button("Save Global Ingredients", key="save_glob_ingr_db"):
+                        # Process saves (adds, updates, deletes)
+                        db_ids_in_editor = set(edited_ingr_df[ingr_rename_map["id"]].dropna().astype(int))
+                        initial_db_ids = set(ing.id for ing in ingredients_db)
+
+                        for _, row in edited_ingr_df.iterrows():
+                            ing_id = row[ingr_rename_map["id"]]
+                            data = {
+                                "name": row[ingr_rename_map["name"]], "provider": row[ingr_rename_map["provider"]],
+                                "price_per_unit": row[ingr_rename_map["price_per_unit"]],
+                                "unit_quantity_kg": row[ingr_rename_map["unit_quantity_kg"]],
+                                "price_url": row[ingr_rename_map["price_url"]]
+                            }
+                            if pd.isna(ing_id): # New row
+                                if data["name"] and data["provider"]: # Basic validation
+                                    db.add(Ingredient(user_id=user_id, **data))
+                            else: # Existing row
+                                ing_id = int(ing_id)
+                                if ing_id in initial_db_ids:
+                                    db.query(Ingredient).filter(Ingredient.id == ing_id, Ingredient.user_id == user_id).update(data)
+                        
+                        ids_to_delete = initial_db_ids - db_ids_in_editor
+                        if ids_to_delete:
+                            db.query(Ingredient).filter(Ingredient.id.in_(ids_to_delete), Ingredient.user_id == user_id).delete(synchronize_session=False)
+                        
+                        db.commit(); st.success("Global ingredients saved!"); st.rerun()
+                except SQLAlchemyError as e: db.rollback(); st.error(f"DB Error (Ingredients): {e}")
+                except Exception as e: st.error(f"Error (Ingredients): {e}")
+
+
+            with tab_emp:
+                st.subheader("Global Employee List")
+                try:
+                    employees_db = db.query(Employee).filter(Employee.user_id == user_id).order_by(Employee.name).all()
+                    emp_df_data = [{"id": emp.id, "name": emp.name, "hourly_rate": emp.hourly_rate, "role": emp.role} for emp in employees_db]
+                    df_emp_display = pd.DataFrame(emp_df_data).rename(columns=emp_rename_map)
+
+                    edited_emp_df = st.data_editor(
+                        df_emp_display,
+                        column_config={
+                            emp_rename_map["id"]: st.column_config.NumberColumn(disabled=True),
+                            emp_rename_map["name"]: st.column_config.TextColumn(required=True),
+                            emp_rename_map["hourly_rate"]: st.column_config.NumberColumn(format="%.2f", required=True, min_value=0.0),
+                            emp_rename_map["role"]: st.column_config.TextColumn()
+                        },
+                        num_rows="dynamic", key="global_employees_editor_db", hide_index=True
+                    )
+                    if st.button("Save Global Employees", key="save_glob_emp_db"):
+                        db_ids_in_editor = set(edited_emp_df[emp_rename_map["id"]].dropna().astype(int))
+                        initial_db_ids = set(emp.id for emp in employees_db)
+                        for _, row in edited_emp_df.iterrows():
+                            emp_id = row[emp_rename_map["id"]]
+                            data = {"name": row[emp_rename_map["name"]], "hourly_rate": row[emp_rename_map["hourly_rate"]], "role": row[emp_rename_map["role"]]}
+                            if pd.isna(emp_id):
+                                if data["name"]: db.add(Employee(user_id=user_id, **data))
+                            else:
+                                emp_id = int(emp_id)
+                                if emp_id in initial_db_ids:
+                                    db.query(Employee).filter(Employee.id == emp_id, Employee.user_id == user_id).update(data)
+                        ids_to_delete = initial_db_ids - db_ids_in_editor
+                        if ids_to_delete: # Before deleting employees, check/handle related GlobalSalary entries or set FK to null/cascade
+                            for emp_id_del in ids_to_delete:
+                                db.query(GlobalSalary).filter(GlobalSalary.employee_id == emp_id_del, GlobalSalary.user_id == user_id).delete(synchronize_session=False)
+                            db.query(Employee).filter(Employee.id.in_(ids_to_delete), Employee.user_id == user_id).delete(synchronize_session=False)
+                        db.commit(); st.success("Global employees saved!"); st.rerun()
+                except SQLAlchemyError as e: db.rollback(); st.error(f"DB Error (Employees): {e}")
+
+
+            with tab_tsk: # Standard Tasks
+                st.subheader("Standard Production Tasks")
+                try:
+                    prod_tasks_db = db.query(StandardProductionTask).filter(StandardProductionTask.user_id == user_id).order_by(StandardProductionTask.task_name).all()
+                    prod_df_data = [{"id": t.id, "task_name": t.task_name} for t in prod_tasks_db]
+                    df_prod_display = pd.DataFrame(prod_df_data).rename(columns=task_rename_map)
+                    edited_prod_df = st.data_editor(df_prod_display, column_config={task_rename_map["id"]: st.column_config.NumberColumn(disabled=True), task_rename_map["task_name"]: st.column_config.TextColumn(required=True)}, num_rows="dynamic", key="g_prod_tsk_db", hide_index=True)
+                    if st.button("Save Prod Tasks", key="s_g_ptsk_db"):
+                        # Similar save logic as ingredients/employees
+                        db_ids_in_editor = set(edited_prod_df[task_rename_map["id"]].dropna().astype(int))
+                        initial_db_ids = set(t.id for t in prod_tasks_db)
+                        for _, row in edited_prod_df.iterrows():
+                            task_id = row[task_rename_map["id"]]
+                            data = {"task_name": row[task_rename_map["task_name"]]}
+                            if pd.isna(task_id):
+                                if data["task_name"]: db.add(StandardProductionTask(user_id=user_id, **data))
+                            else:
+                                task_id = int(task_id)
+                                if task_id in initial_db_ids:
+                                     db.query(StandardProductionTask).filter(StandardProductionTask.id == task_id, StandardProductionTask.user_id == user_id).update(data)
+                        ids_to_delete = initial_db_ids - db_ids_in_editor
+                        if ids_to_delete: db.query(StandardProductionTask).filter(StandardProductionTask.id.in_(ids_to_delete), StandardProductionTask.user_id == user_id).delete(synchronize_session=False)
+                        db.commit(); st.success("Prod tasks saved!"); st.rerun()
+                except SQLAlchemyError as e: db.rollback(); st.error(f"DB Error (Prod Tasks): {e}")
+
+                st.subheader("Standard Shipping Tasks")
+                # ... Similar logic for Shipping Tasks ...
+                try:
+                    ship_tasks_db = db.query(StandardShippingTask).filter(StandardShippingTask.user_id == user_id).order_by(StandardShippingTask.task_name).all()
+                    ship_df_data = [{"id": t.id, "task_name": t.task_name} for t in ship_tasks_db]
+                    df_ship_display = pd.DataFrame(ship_df_data).rename(columns=task_rename_map)
+                    edited_ship_df = st.data_editor(df_ship_display, column_config={task_rename_map["id"]: st.column_config.NumberColumn(disabled=True), task_rename_map["task_name"]: st.column_config.TextColumn(required=True)}, num_rows="dynamic", key="g_ship_tsk_db", hide_index=True)
+                    if st.button("Save Ship Tasks", key="s_g_stsk_db"):
+                        db_ids_in_editor = set(edited_ship_df[task_rename_map["id"]].dropna().astype(int))
+                        initial_db_ids = set(t.id for t in ship_tasks_db)
+                        for _, row in edited_ship_df.iterrows():
+                            task_id = row[task_rename_map["id"]]
+                            data = {"task_name": row[task_rename_map["task_name"]]}
+                            if pd.isna(task_id):
+                                if data["task_name"]: db.add(StandardShippingTask(user_id=user_id, **data))
+                            else:
+                                task_id = int(task_id)
+                                if task_id in initial_db_ids:
+                                    db.query(StandardShippingTask).filter(StandardShippingTask.id == task_id, StandardShippingTask.user_id == user_id).update(data)
+                        ids_to_delete = initial_db_ids - db_ids_in_editor
+                        if ids_to_delete: db.query(StandardShippingTask).filter(StandardShippingTask.id.in_(ids_to_delete), StandardShippingTask.user_id == user_id).delete(synchronize_session=False)
+                        db.commit(); st.success("Ship tasks saved!"); st.rerun()
+                except SQLAlchemyError as e: db.rollback(); st.error(f"DB Error (Ship Tasks): {e}")
+
+
+            with tab_gcost:
+                st.subheader("Global Monthly Overheads")
+                try:
+                    gc_settings = db.query(GlobalCosts).filter(GlobalCosts.user_id == user_id).first()
+                    if not gc_settings: # Create if doesn't exist for the user
+                        gc_settings = GlobalCosts(user_id=user_id, monthly_rent=0.0, monthly_utilities=0.0)
+                        db.add(gc_settings)
+                        db.commit()
+                        db.refresh(gc_settings)
+                    
+                    n_rent = st.number_input("Global Monthly Rent (€)", value=float(gc_settings.monthly_rent), min_value=0.0, format="%.2f", key="gc_rent_db")
+                    n_util = st.number_input("Global Monthly Utilities (€)", value=float(gc_settings.monthly_utilities), min_value=0.0, format="%.2f", key="gc_util_db")
+                    if st.button("Save Global Overheads", key="s_g_oh_db"):
+                        gc_settings.monthly_rent = n_rent
+                        gc_settings.monthly_utilities = n_util
+                        db.commit(); st.success("Global overheads saved!")
+                except SQLAlchemyError as e: db.rollback(); st.error(f"DB Error (Overheads): {e}")
+
+
+            with tab_gsal:
+                st.subheader("Global Salaries (Linked to Employees)")
+                try:
+                    employees_for_salary_db = db.query(Employee.id, Employee.name).filter(Employee.user_id == user_id).order_by(Employee.name).all()
+                    employee_options_for_salary = {emp.name: emp.id for emp in employees_for_salary_db}
+                    employee_display_names_for_salary = list(employee_options_for_salary.keys())
+
+                    global_salaries_db = db.query(GlobalSalary).join(Employee).filter(GlobalSalary.user_id == user_id).options(joinedload(GlobalSalary.employee_ref)).order_by(Employee.name).all()
+                    
+                    gsal_df_data = [{"id": sal.id, "employee_name_display": sal.employee_ref.name, "monthly_amount": sal.monthly_amount, "_employee_id_hidden": sal.employee_id} for sal in global_salaries_db]
+                    df_gsal_display = pd.DataFrame(gsal_df_data).rename(columns=gsal_rename_map)
+
+                    edited_gsal_df = st.data_editor(
+                        df_gsal_display,
+                        column_config={
+                            gsal_rename_map["id"]: st.column_config.NumberColumn(disabled=True),
+                            gsal_rename_map["employee_name_display"]: st.column_config.SelectboxColumn(options=employee_display_names_for_salary, required=True),
+                            gsal_rename_map["monthly_amount"]: st.column_config.NumberColumn(format="%.2f", required=True, min_value=0.0)
+                            # "_employee_id_hidden": st.column_config.NumberColumn(disabled=True) # Not for display
+                        },
+                        num_rows="dynamic", key="g_sal_ed_db", hide_index=True
+                    )
+                    if st.button("Save Global Salaries", key="s_g_sal_db"):
+                        db_ids_in_editor = set(edited_gsal_df[gsal_rename_map["id"]].dropna().astype(int))
+                        initial_db_ids = set(sal.id for sal in global_salaries_db)
+
+                        for _, row in edited_gsal_df.iterrows():
+                            sal_id = row[gsal_rename_map["id"]]
+                            emp_name_selected = row[gsal_rename_map["employee_name_display"]]
+                            emp_id_selected = employee_options_for_salary.get(emp_name_selected)
+
+                            if not emp_id_selected:
+                                st.warning(f"Employee '{emp_name_selected}' not found for salary. Skipping row.")
+                                continue
+                            data = {"employee_id": emp_id_selected, "monthly_amount": row[gsal_rename_map["monthly_amount"]]}
+
+                            if pd.isna(sal_id): # New
+                                db.add(GlobalSalary(user_id=user_id, **data))
+                            else: # Existing
+                                sal_id = int(sal_id)
+                                if sal_id in initial_db_ids:
+                                    db.query(GlobalSalary).filter(GlobalSalary.id == sal_id, GlobalSalary.user_id == user_id).update(data)
+                        
+                        ids_to_delete = initial_db_ids - db_ids_in_editor
+                        if ids_to_delete: db.query(GlobalSalary).filter(GlobalSalary.id.in_(ids_to_delete), GlobalSalary.user_id == user_id).delete(synchronize_session=False)
+                        db.commit(); st.success("Global salaries saved!"); st.rerun()
+                except SQLAlchemyError as e: db.rollback(); st.error(f"DB Error (Salaries): {e}")
+
+
+        # --- Product Management UI (Database Version) ---
+        elif app_mode == "Manage Products":
+            user_id = st.session_state.user_id
+            st.sidebar.subheader("Products (from DB)")
+            try:
+                products_db = db.query(Product.id, Product.product_name).filter(Product.user_id == user_id).order_by(Product.product_name).all()
+                product_names_from_db = [p.product_name for p in products_db]
+                product_id_map = {p.product_name: p.id for p in products_db}
+
+                # --- Product Creation / Selection in Sidebar ---
+                if 'new_product_cb_db' not in st.session_state: st.session_state.new_product_cb_db = False
+                if 'new_product_name_input_db' not in st.session_state: st.session_state.new_product_name_input_db = "New DB Product"
                 
-                if selected_product_name_sidebar != st.session_state.current_product_name:
-                    st.session_state.current_product_name = selected_product_name_sidebar
-                    st.session_state.load_saved_product = True
-                    st.rerun() 
-                elif 'load_saved_product' not in st.session_state and st.session_state.current_product_name is not None:
-                    st.session_state.load_saved_product = True
-            else: 
-                st.info("No saved products. Tick 'Create New Product' to start.")
-                st.session_state.load_saved_product = False 
-                if 'current_product_name' in st.session_state: 
-                    del st.session_state.current_product_name
+                if 'form_message_db' in st.session_state and st.session_state.form_message_db:
+                    msg_type, msg_content = st.session_state.form_message_db
+                    if msg_type == "success": st.success(msg_content) # Display in main area
+                    elif msg_type == "warning": st.warning(msg_content)
+                    del st.session_state.form_message_db
 
-# --- Tutorial Tab --- (Keep as is from v2.9)
-if app_mode == "Tutorial":
-    st.header("📖 Application Tutorial")
-    st.markdown("""
-    Welcome to the Product Cost Calculator! This tool helps you break down the costs associated with your products
-    to determine profitability and make informed pricing decisions.
-
-    **General Workflow:**
-    1.  **Define Global Data:** Start by inputting shared resources like ingredients, employees, standard tasks, and overhead costs. This data is defined once and used across multiple products.
-    2.  **Manage Products:** Create new products or edit existing ones. For each product, you'll specify how it uses the global resources and add product-specific costs.
-    3.  **Review Summary & Pricing:** Analyze the calculated cost per item, set your pricing, and view profit projections.
-
-    ---
-    ### 1. Manage Global Data 🌍
-    This section is crucial for setting up the foundational data for your calculations. Access it from the sidebar.
-    Changes made here are saved by clicking the "Save" button within each respective sub-tab.
-    """)
-
-    st.subheader("Ingredients Tab")
-    st.markdown("""
-    List all raw materials or ingredients you purchase.
-    -   **Ingredient Name:** The common name of the ingredient (e.g., "Olive Oil").
-    -   **Provider:** The supplier of this ingredient (e.g., "Olio Verde"). This is important if the same ingredient from different providers has different costs.
-    -   **Price (€) for Unit:** The price you pay for the bulk quantity of this ingredient (e.g., if a 5kg container of Olive Oil costs €25.00, enter `25.00`).
-    -   **Unit Quantity (kg):** The quantity (in kilograms) that the "Price (€) for Unit" corresponds to (e.g., for the 5kg container, enter `5.0`).
-    -   **Price URL:** (Optional) A web link to the ingredient's purchasing page or price reference. This will be displayed as a clickable link.
-        *Example: If you buy Lye in 2kg bags for €15, you'd enter: Name: Sodium Hydroxide (Lye), Provider: ChemCo, Price: 15.00, Unit Qty: 2.0, Price URL: https://example.com/chemco/lye.*
-    """)
-
-    st.subheader("Employees Tab")
-    st.markdown("""
-    List all employees involved in production or shipping, along with their hourly rates.
-    -   **Employee Name:** The name of the employee (e.g., "Jane Doe", "Owner").
-    -   **Hourly Rate (€):** The cost of this employee per hour (e.g., `15.50`).
-    -   **Role:** Their general role or title (e.g., "Production Assistant", "Soap Maker").
-    """)
-
-    st.subheader("Tasks Tab")
-    st.markdown("""
-    Define standardized names for common production and shipping tasks. This helps in consistently assigning labor.
-    -   **Production Tasks:** (e.g., "Mixing Oils", "Cutting Soap", "Molding")
-    -   **Shipping Tasks:** (e.g., "Labeling Items", "Packing Orders", "Post Office Run")
-    -   For each, simply add rows with the **Task Name**.
-    """)
-
-    st.subheader("Overheads Tab")
-    st.markdown("""
-    Enter your fixed monthly overhead costs that are shared across all products.
-    -   **Global Monthly Rent (€):** Your total monthly rent for your production space.
-    -   **Global Monthly Utilities (€):** Your total monthly utilities (electricity, water, gas, internet, etc.).
-    These costs will be allocated to products later based on their production volume.
-    """)
-
-    st.subheader("Salaries Tab")
-    st.markdown("""
-    Define fixed monthly salaries for employees. This is different from hourly labor assigned to specific tasks.
-    -   **Employee Name:** Select an employee from the list defined in the "Employees" tab.
-    -   **Monthly Salary Amount (€):** The fixed monthly salary for this employee.
-    This allows you to allocate a portion of an employee's fixed salary to a product as an overhead.
-    """)
-
-    st.markdown("---")
-    st.header("2. Manage Products 📝")
-    st.markdown("""
-    Once global data is set up, you can define your products. Select "Manage Products" from the sidebar.
-    You can create a new product or select an existing one to edit from the dropdown.
-    For each product, you'll navigate through several tabs:
-    """)
-
-    st.subheader("Materials Tab 🧪")
-    st.markdown("""
-    Specify the ingredients and quantities used to make one batch of *this specific product*.
-    -   **Batch Yield (Number of Items):** How many individual sellable items are produced from one batch recipe (e.g., if one soap recipe makes 10 bars, enter `10`).
-    -   **Ingredient Grid:**
-        -   **Ingredient (Provider):** Select an ingredient (which includes its provider) from the global list you defined earlier.
-        -   **Grams Used in Batch:** Enter the total quantity (in grams) of that specific ingredient used in the *entire batch* (e.g., if your recipe for 10 bars uses 500g of Olive Oil, enter `500.0`).
-    The app calculates the material cost per item based on this and the global ingredient prices.
-    """)
-
-    st.subheader("Labor Tab 🛠️")
-    st.markdown("""
-    Assign labor costs to this product.
-    -   **Production Tasks / Shipping Tasks Grids:**
-        -   **Task:** Select a standard task name (defined in Global Data).
-        -   **Performed By:** Select an employee (defined in Global Data).
-        -   **Time (min):** How many minutes this employee spends on this task for a certain number of items.
-        -   **# Items in Task:** How many items are processed by this employee during the "Time (min)" entered for this specific task.
-            *Example: If 'Jane Doe' takes 60 minutes to cut 100 bars of soap: Task: Cut Loaves, By: Jane Doe, Time: 60, # Items: 100.*
-    -   **Salary Allocation (Optional):**
-        -   **Allocate Salary of Employee:** If a portion of an employee's fixed global salary should be attributed to this product, select the salaried employee here.
-        -   **Items of THIS Product per Month (for salary allocation):** Estimate how many units of *this specific product* are typically produced or contribute to justifying this salary allocation per month. This helps distribute the fixed salary cost.
-    """)
-
-    st.subheader("Other Costs Tab 📦")
-    st.markdown("""
-    Account for other overheads and product-specific costs.
-    -   **Rent & Utilities Allocation:**
-        -   **Items of THIS Product per Month (for rent/utilities):** Estimate the monthly production volume for *this product*. This is used to allocate a portion of the global rent & utilities costs to each item of this product.
-    -   **Packaging Costs (per Item):** These are costs directly tied to packaging one unit of *this product*.
-        -   **Label Cost/Item (€):** Cost of the label for one item.
-        -   **Other Pkg Materials Cost/Item (€):** Cost of boxes, wrappers, filler, etc., for one item.
-    -   **Online Selling Fees - Retail / Wholesale:** Input the typical fees associated with selling *this product* through different channels. These are usually percentages of the order value or flat fees.
-    """)
-
-    st.subheader("Summary & Pricing Tab 📊")
-    st.markdown("""
-    This tab brings everything together.
-    -   **Cost Summary:** Shows a breakdown of all calculated costs per item.
-    -   **Subtotal Cost per Item:** The total direct and allocated costs for one item.
-    -   **Buffer Percentage:** Add a safety margin to your costs.
-    -   **Final Cost per Item (with Buffer):** Subtotal cost plus the buffer. This is your break-even point.
-    -   **Pricing Strategy:**
-        -   **Wholesale Price/Item (€):** The price you sell one item for to wholesale customers.
-        -   **Retail Price/Item (€):** The price you sell one item for directly to retail customers.
-    -   **Profit Analysis:** Shows estimated profit per item and margin for both channels, considering selling fees.
-    -   **Revenue and Profit Projection:**
-        -   **Monthly Production (Items):** How many units of *this product* you plan to produce/sell monthly.
-        -   **Wholesale/Retail Distribution (%):** What percentage of your sales for this product go through each channel.
-        -   The tables then project annual items, revenue, and profit.
-
-    **Always remember to click the "Save Product: [Product Name]" button at the bottom of this section to save all changes made to the current product.**
-    """)
-
-    st.markdown("---")
-    st.header("3. Data Persistence 💾")
-    st.markdown(f"""
-    All your Global Data and Product Data are saved as JSON files (`{GLOBAL_DATA_FILENAME}`, `{SAVED_PRODUCTS_FILENAME}`)
-    in the following directory relative to the app's root: `{BASE_DIR}`.
-    If running locally, this directory will be in the same folder as your Python script. On Streamlit Cloud, it will be within the app's container.
-    You can back up these files. If you move the application or want to share the data, copy these files.
-    """)
-
-# --- Global Data Management UI --- (Keep as is from v2.9)
-elif app_mode == "Manage Global Data":
-    st.header("🌍 Manage Global Data")
-    st.info("Define shared resources like ingredients, employees, and global costs here.")
-    tab_ingr, tab_emp, tab_tsk, tab_gcost, tab_gsal = st.tabs(["Ingredients", "Employees", "Tasks", "Overheads", "Salaries"])
-
-    ingr_rename_map = {
-        "name": "Ingredient Name", "provider": "Provider",
-        "price_per_unit": "Price (€) for Unit", "unit_quantity_kg": "Unit Quantity (kg)",
-        "price_url": "Price URL"
-    }
-    ingr_inv_rename_map = {v: k for k, v in ingr_rename_map.items()}
-    emp_rename_map = {"name": "Employee Name", "hourly_rate": "Hourly Rate (€)", "role": "Role"}
-    emp_inv_rename_map = {v: k for k, v in emp_rename_map.items()}
-    task_rename_map = {"task_name": "Task Name"}
-    task_inv_rename_map = {v: k for k, v in task_rename_map.items()}
-    gsal_rename_map = {"employee_name": "Employee Name", "monthly_amount": "Monthly Salary Amount (€)"}
-    gsal_inv_rename_map = {v: k for k, v in gsal_rename_map.items()}
-
-    with tab_ingr:
-        st.subheader("Global Ingredient List")
-        current_ingredients_data = global_data.get("ingredients", [])
-        for item in current_ingredients_data: 
-            if "price_url" not in item: item["price_url"] = ""
-        
-        df_ingr_orig = pd.DataFrame(current_ingredients_data)
-        if df_ingr_orig.empty: 
-             df_ingr_orig = pd.DataFrame(columns=list(ingr_inv_rename_map.values()))
-
-        df_ingr_renamed = df_ingr_orig.rename(columns=ingr_rename_map)
-        edited_ingr_df = st.data_editor(df_ingr_renamed,
-            column_config={
-                ingr_rename_map["name"]: st.column_config.TextColumn(required=True),
-                ingr_rename_map["provider"]: st.column_config.TextColumn(required=True),
-                ingr_rename_map["price_per_unit"]: st.column_config.NumberColumn(format="%.2f",required=True,min_value=0.01, help="Price for the 'Unit Quantity'"),
-                ingr_rename_map["unit_quantity_kg"]: st.column_config.NumberColumn(help="E.g., if price is for a 5kg bag, enter 5.",format="%.3f",required=True,min_value=0.001),
-                ingr_rename_map["price_url"]: st.column_config.LinkColumn(
-                    help="Link to ingredient purchasing page. Will display as clickable URL.", 
-                    validate=r"^https?://[^\s/$.?#].[^\s]*$" 
-                )
-            },
-            num_rows="dynamic", key="global_ingredients_editor_v3")
-        if st.button("Save Global Ingredients",key="save_glob_ingr_v3"):
-            global_data["ingredients"]=edited_ingr_df.rename(columns=ingr_inv_rename_map).to_dict("records")
-            save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Global ingredients saved!"); st.rerun()
-
-    with tab_emp:
-        st.subheader("Global Employee List")
-        df_emp_orig = pd.DataFrame(global_data.get("employees", []))
-        if df_emp_orig.empty: df_emp_orig = pd.DataFrame(columns=list(emp_inv_rename_map.values()))
-        df_emp_renamed = df_emp_orig.rename(columns=emp_rename_map)
-        edited_emp_df = st.data_editor(df_emp_renamed,
-            column_config={
-                emp_rename_map["name"]: st.column_config.TextColumn(required=True),
-                emp_rename_map["hourly_rate"]: st.column_config.NumberColumn(format="%.2f",required=True,min_value=0.0, help="Rate in €"),
-                emp_rename_map["role"]: st.column_config.TextColumn()},
-            num_rows="dynamic", key="global_employees_editor_v2")
-        if st.button("Save Global Employees",key="save_glob_emp_v2"):
-            global_data["employees"]=edited_emp_df.rename(columns=emp_inv_rename_map).to_dict("records")
-            save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Global employees saved!"); st.rerun()
-    with tab_tsk:
-        st.subheader("Standard Production Tasks")
-        df_prod_tsk_orig = pd.DataFrame(global_data.get("standard_production_tasks", []))
-        if df_prod_tsk_orig.empty: df_prod_tsk_orig = pd.DataFrame(columns=list(task_inv_rename_map.values()))
-        df_prod_tsk_renamed = df_prod_tsk_orig.rename(columns=task_rename_map)
-        edited_prod_tsk_df = st.data_editor(df_prod_tsk_renamed,
-            column_config={task_rename_map["task_name"]:st.column_config.TextColumn(required=True)},num_rows="dynamic",key="g_prod_tsk_ed_v2")
-        if st.button("Save Prod Tasks",key="s_g_ptsk_v2"):
-            global_data["standard_production_tasks"]=edited_prod_tsk_df.rename(columns=task_inv_rename_map).to_dict("records")
-            save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Prod tasks saved!"); st.rerun()
-        st.subheader("Standard Shipping Tasks")
-        df_ship_tsk_orig = pd.DataFrame(global_data.get("standard_shipping_tasks", []))
-        if df_ship_tsk_orig.empty: df_ship_tsk_orig = pd.DataFrame(columns=list(task_inv_rename_map.values()))
-        df_ship_tsk_renamed = df_ship_tsk_orig.rename(columns=task_rename_map)
-        edited_ship_tsk_df = st.data_editor(df_ship_tsk_renamed,
-            column_config={task_rename_map["task_name"]:st.column_config.TextColumn(required=True)},num_rows="dynamic",key="g_ship_tsk_ed_v2")
-        if st.button("Save Ship Tasks",key="s_g_stsk_v2"):
-            global_data["standard_shipping_tasks"]=edited_ship_tsk_df.rename(columns=task_inv_rename_map).to_dict("records")
-            save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Ship tasks saved!"); st.rerun()
-    with tab_gcost:
-        st.subheader("Global Monthly Overheads")
-        cg_costs = global_data.get("global_costs",DEFAULT_GLOBAL_DATA["global_costs"])
-        if not isinstance(cg_costs, dict): cg_costs = DEFAULT_GLOBAL_DATA["global_costs"]
-        n_rent = st.number_input("Global Monthly Rent (€)",value=float(cg_costs.get("monthly_rent",0.0)),min_value=0.0,format="%.2f")
-        n_util = st.number_input("Global Monthly Utilities (€)",value=float(cg_costs.get("monthly_utilities",0.0)),min_value=0.0,format="%.2f")
-        if st.button("Save Global Overheads",key="s_g_oh_v2"): global_data["global_costs"]={"monthly_rent":n_rent,"monthly_utilities":n_util}; save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Global overheads saved!") 
-    with tab_gsal:
-        st.subheader("Global Salaries (Linked to Employees)")
-        employee_names_for_salary_dropdown = [emp.get("name") for emp in global_data.get("employees", []) if emp.get("name")]
-        if not employee_names_for_salary_dropdown: employee_names_for_salary_dropdown = ["No Employees Defined"]
-        
-        df_gsal_orig = pd.DataFrame(global_data.get("global_salaries", []))
-        if df_gsal_orig.empty: df_gsal_orig = pd.DataFrame(columns=list(gsal_inv_rename_map.values()))
-        df_gsal_renamed = df_gsal_orig.rename(columns=gsal_rename_map)
-        
-        edited_gsal_df = st.data_editor(df_gsal_renamed,
-            column_config={
-                gsal_rename_map["employee_name"]:st.column_config.SelectboxColumn(options=employee_names_for_salary_dropdown, required=True),
-                gsal_rename_map["monthly_amount"]:st.column_config.NumberColumn(format="%.2f",required=True,min_value=0.0, help="Salary in €")},
-            num_rows="dynamic",key="g_sal_ed_v2")
-        if st.button("Save Global Salaries",key="s_g_sal_v2"):
-            valid_salaries_df = edited_gsal_df.rename(columns=gsal_inv_rename_map)
-            valid_salaries = []
-            for sal_entry in valid_salaries_df.to_dict("records"):
-                if sal_entry.get("employee_name") in employee_names_for_salary_dropdown and sal_entry.get("employee_name") != "No Employees Defined":
-                    valid_salaries.append(sal_entry)
-            global_data["global_salaries"]=valid_salaries
-            save_json_data(GLOBAL_DATA_FILE_PATH,global_data); st.success("Global salaries saved!"); st.rerun()
-
-# --- Product Management UI --- (Keep as is from v2.9, with its internal logic for tabs)
-elif app_mode == "Manage Products" and 'current_product_name' in st.session_state and st.session_state.current_product_name:
-    product_name = st.session_state.current_product_name
-    
-    if product_name not in saved_products: 
-        st.warning(f"Product '{product_name}' may no longer exist or an error occurred. Please select a product or create a new one.")
-        if 'current_product_name' in st.session_state: del st.session_state.current_product_name
-        st.session_state.load_saved_product = False
-        st.rerun() 
-    else:
-        product_data = saved_products[product_name]
-        st.header(f"📝 Managing Product: {product_name}")
-        prod_tab1,prod_tab2,prod_tab3,prod_tab4=st.tabs(["Materials","Labor","Other Costs","Summary & Pricing"])
-        mats_cost_pi,prod_lab_cost_pi,ship_lab_cost_pi=0.0,0.0,0.0
-        sal_cost_pi,rent_util_cost_pi,pkg_cost_pi=0.0,0.0,0.0
-        ret_fee_perc_calc,ws_fee_perc_calc=0.0,0.0
-
-        mat_used_rename_map = {"ingredient_display_name": "Ingredient (Provider)", "quantity_grams_used": "Grams Used in Batch"}
-        mat_used_inv_rename_map = {v: k for k, v in mat_used_rename_map.items()}
-        task_perf_rename_map = {"task_name": "Task", "employee_name": "Performed By", "time_minutes": "Time (min)", "items_processed_in_task": "# Items in Task"}
-        task_perf_inv_rename_map = {v: k for k, v in task_perf_rename_map.items()}
-
-        with prod_tab1:
-            st.subheader("🧪 Materials Used")
-            product_data["batch_size_items"]=st.number_input("Batch Yield (Number of Items)",value=int(product_data.get("batch_size_items",1)),min_value=1,key=f"{product_name}_bsi")
-            g_ingr_list = global_data.get("ingredients", [])
-            ingr_display_opts = [create_ingredient_display_string(ing.get("name"), ing.get("provider")) for ing in g_ingr_list if ing.get("name") and ing.get("provider")]
-            if not ingr_display_opts: ingr_display_opts = ["No ingredients (with provider) defined globally"]
-            
-            current_mats_list = product_data.get('materials_used',[])
-            df_mats_orig = pd.DataFrame(current_mats_list)
-            if df_mats_orig.empty: 
-                df_mats_orig = pd.DataFrame(columns=list(mat_used_inv_rename_map.values()))
-            if df_mats_orig.empty and ingr_display_opts[0] != "No ingredients (with provider) defined globally":
-                 df_mats_orig = pd.DataFrame([{"ingredient_display_name": ingr_display_opts[0], "quantity_grams_used":0.0}])
-
-            df_mats_renamed = df_mats_orig.rename(columns=mat_used_rename_map)
-            edited_mats_df = st.data_editor(df_mats_renamed,
-                column_config={
-                    mat_used_rename_map["ingredient_display_name"]:st.column_config.SelectboxColumn(options=ingr_display_opts,required=True),
-                    mat_used_rename_map["quantity_grams_used"]:st.column_config.NumberColumn(format="%.2f",required=True,min_value=0.0, help="Total grams for the entire batch")},
-                num_rows="dynamic",key=f"{product_name}_mats_ed_v2")
-            
-            product_data['materials_used'] = edited_mats_df.rename(columns=mat_used_inv_rename_map).to_dict("records")
-            product_data['materials_used'] = [r for r in product_data['materials_used'] if r.get("ingredient_display_name") and r.get("ingredient_display_name") != "No ingredients (with provider) defined globally" and r.get("quantity_grams_used") is not None and float(r.get("quantity_grams_used", 0.0)) > 0] 
-            total_mats_cost_for_prod=0.0
-            if product_data['materials_used'] and g_ingr_list:
-                temp_cost_list = []
-                for mat_used_row in product_data['materials_used']:
-                    display_name_stored = mat_used_row.get("ingredient_display_name")
-                    ingr_name_parsed, ingr_provider_parsed = parse_ingredient_display_string(display_name_stored)
-                    grams_used = float(mat_used_row.get("quantity_grams_used", 0))
-                    found_ingredient = next((gi for gi in g_ingr_list if gi.get("name") == ingr_name_parsed and gi.get("provider") == ingr_provider_parsed), None)
-                    if found_ingredient:
-                        price_per_unit = float(found_ingredient.get("price_per_unit", 0)); unit_qty_kg = float(found_ingredient.get("unit_quantity_kg", 0))
-                        if unit_qty_kg > 0: temp_cost_list.append(grams_used * (price_per_unit / (unit_qty_kg * 1000)))
-                total_mats_cost_for_prod = sum(temp_cost_list)
-            cur_bsi=product_data.get("batch_size_items",1); cur_bsi=1 if cur_bsi==0 else cur_bsi
-            mats_cost_pi=total_mats_cost_for_prod/cur_bsi if cur_bsi > 0 else 0
-            st.metric("Total Materials Cost for Batch",f"€{total_mats_cost_for_prod:.2f}"); st.metric("Materials Cost per Item",f"€{mats_cost_pi:.2f}")
-
-        with prod_tab2:
-            st.subheader("🛠️ Labor")
-            g_emp_df=pd.DataFrame(global_data.get("employees",[]))
-            emp_opts_g=g_emp_df["name"].tolist() if not g_emp_df.empty else ["No employees defined globally"]
-            prod_tsk_opts=[t.get("task_name","") for t in global_data.get("standard_production_tasks",[]) if t.get("task_name")] or ["No prod tasks defined"]
-            ship_tsk_opts=[t.get("task_name","") for t in global_data.get("standard_shipping_tasks",[]) if t.get("task_name")] or ["No ship tasks defined"]
-            
-            st.markdown("#### Production Tasks")
-            df_prod_tsk_orig = pd.DataFrame(product_data.get('production_tasks_performed',[]))
-            if df_prod_tsk_orig.empty: df_prod_tsk_orig = pd.DataFrame(columns=list(task_perf_inv_rename_map.values()))
-            if df_prod_tsk_orig.empty and prod_tsk_opts[0]!="No prod tasks defined" and emp_opts_g[0]!="No employees defined globally":
-                df_prod_tsk_orig = pd.DataFrame([{"task_name":prod_tsk_opts[0],"employee_name":emp_opts_g[0],"time_minutes":0.0,"items_processed_in_task":1}])
-            
-            df_prod_tsk_renamed = df_prod_tsk_orig.rename(columns=task_perf_rename_map)
-            edited_prod_tsk_df=st.data_editor(df_prod_tsk_renamed,
-                column_config={
-                    task_perf_rename_map["task_name"]:st.column_config.SelectboxColumn(options=prod_tsk_opts,required=True),
-                    task_perf_rename_map["employee_name"]:st.column_config.SelectboxColumn(options=emp_opts_g,required=True),
-                    task_perf_rename_map["time_minutes"]:st.column_config.NumberColumn(format="%.1f",required=True,min_value=0.0, help="in minutes"),
-                    task_perf_rename_map["items_processed_in_task"]:st.column_config.NumberColumn(format="%d",required=True,min_value=1)},
-                num_rows="dynamic",key=f"{product_name}_prod_tsk_ed_v2")
-            product_data['production_tasks_performed']=edited_prod_tsk_df.rename(columns=task_perf_inv_rename_map).to_dict("records")
-            product_data['production_tasks_performed'] = [r for r in product_data['production_tasks_performed'] if r.get("task_name") and r.get("employee_name") and r.get("time_minutes") is not None and r.get("items_processed_in_task") is not None and r.get("task_name")!="No prod tasks defined" and r.get("employee_name")!="No employees defined globally" and float(r.get("time_minutes",0.0)) >= 0 and int(r.get("items_processed_in_task",0)) > 0 ] 
-            if product_data['production_tasks_performed'] and not g_emp_df.empty:
-                emp_rate_lookup=dict(zip(g_emp_df["name"],g_emp_df["hourly_rate"].astype(float)))
-                prod_lab_cost_pi=sum([(float(r.get("time_minutes",0))/60*emp_rate_lookup.get(r.get("employee_name"),0))/int(r.get("items_processed_in_task",1) or 1) for r in product_data['production_tasks_performed']])
-            st.metric("Production Labor Cost per Item",f"€{prod_lab_cost_pi:.2f}")
-
-            st.markdown("#### Shipping Tasks")
-            df_ship_tsk_orig = pd.DataFrame(product_data.get('shipping_tasks_performed',[]))
-            if df_ship_tsk_orig.empty: df_ship_tsk_orig = pd.DataFrame(columns=list(task_perf_inv_rename_map.values()))
-            if df_ship_tsk_orig.empty and ship_tsk_opts[0]!="No ship tasks defined" and emp_opts_g[0]!="No employees defined globally":
-                df_ship_tsk_orig = pd.DataFrame([{"task_name":ship_tsk_opts[0],"employee_name":emp_opts_g[0],"time_minutes":0.0,"items_processed_in_task":1}])
-            
-            df_ship_tsk_renamed = df_ship_tsk_orig.rename(columns=task_perf_rename_map)
-            edited_ship_tsk_df=st.data_editor(df_ship_tsk_renamed,
-                column_config={
-                    task_perf_rename_map["task_name"]:st.column_config.SelectboxColumn(options=ship_tsk_opts,required=True),
-                    task_perf_rename_map["employee_name"]:st.column_config.SelectboxColumn(options=emp_opts_g,required=True),
-                    task_perf_rename_map["time_minutes"]:st.column_config.NumberColumn(format="%.1f",required=True,min_value=0.0, help="in minutes"),
-                    task_perf_rename_map["items_processed_in_task"]:st.column_config.NumberColumn(format="%d",required=True,min_value=1)},
-                num_rows="dynamic",key=f"{product_name}_ship_tsk_ed_v2")
-            product_data['shipping_tasks_performed']=edited_ship_tsk_df.rename(columns=task_perf_inv_rename_map).to_dict("records")
-            product_data['shipping_tasks_performed'] = [r for r in product_data['shipping_tasks_performed'] if r.get("task_name") and r.get("employee_name") and r.get("time_minutes") is not None and r.get("items_processed_in_task") is not None and r.get("task_name")!="No ship tasks defined" and r.get("employee_name")!="No employees defined globally" and float(r.get("time_minutes",0.0)) >= 0 and int(r.get("items_processed_in_task",0)) > 0]
-            if product_data['shipping_tasks_performed'] and not g_emp_df.empty:
-                emp_rate_lookup=dict(zip(g_emp_df["name"],g_emp_df["hourly_rate"].astype(float)))
-                ship_lab_cost_pi=sum([(float(r.get("time_minutes",0))/60*emp_rate_lookup.get(r.get("employee_name"),0))/int(r.get("items_processed_in_task",1) or 1) for r in product_data['shipping_tasks_performed']])
-            st.metric("Shipping Labor Cost per Item",f"€{ship_lab_cost_pi:.2f}")
-            st.metric("Total Direct Labor Cost per Item",f"€{prod_lab_cost_pi+ship_lab_cost_pi:.2f}")
-            
-            st.markdown("#### Salary Allocation (Optional)")
-            salaried_employees_globally = [sal.get("employee_name") for sal in global_data.get("global_salaries", []) if sal.get("employee_name")]
-            if not salaried_employees_globally: salaried_employees_globally = ["No Global Salaries Defined"]
-            current_sal_alloc=product_data.get("salary_allocation",{"employee_name_for_salary":"None","items_per_month_for_salary":1000})
-            selected_employee_for_salary = current_sal_alloc.get("employee_name_for_salary", "None")
-            if selected_employee_for_salary not in (["None"] + salaried_employees_globally): selected_employee_for_salary = "None"
-            sel_emp_name_for_sal=st.selectbox("Allocate Salary of Employee",options=["None"]+salaried_employees_globally,
-                index=(["None"]+salaried_employees_globally).index(selected_employee_for_salary),
-                key=f"{product_name}_sel_emp_for_sal")
-            items_for_sal_alloc=st.number_input("Items of THIS Product per Month (for salary allocation)",value=int(current_sal_alloc.get("items_per_month_for_salary",1000)),min_value=1,key=f"{product_name}_items_for_sal")
-            product_data["salary_allocation"]={"employee_name_for_salary":sel_emp_name_for_sal,"items_per_month_for_salary":items_for_sal_alloc}
-            sal_cost_pi = 0.0
-            if sel_emp_name_for_sal!="None" and sel_emp_name_for_sal != "No Global Salaries Defined" and items_for_sal_alloc>0:
-                sal_info=next((s for s in global_data.get("global_salaries",[]) if s.get("employee_name")==sel_emp_name_for_sal),None)
-                if sal_info: sal_cost_pi=float(sal_info.get("monthly_amount",0))/items_for_sal_alloc
-            st.metric("Allocated Salary Cost per Item",f"€{sal_cost_pi:.2f}")
-
-        with prod_tab3:
-            st.subheader("📦 Other Costs")
-            st.markdown("#### Rent & Utilities Allocation")
-            items_for_rent_alloc=st.number_input("Items of THIS Product per Month (for rent/utilities)",value=int(product_data.get("rent_utilities_allocation",{}).get("items_per_month_for_rent",1000)),min_value=1,key=f"{product_name}_items_for_rent")
-            product_data["rent_utilities_allocation"]={"items_per_month_for_rent":items_for_rent_alloc}
-            rent_util_cost_pi = 0.0 
-            if items_for_rent_alloc>0:
-                g_rent=float(global_data.get("global_costs",{}).get("monthly_rent",0)); g_util=float(global_data.get("global_costs",{}).get("monthly_utilities",0))
-                rent_util_cost_pi=(g_rent+g_util)/items_for_rent_alloc
-            st.metric("Allocated Rent & Utilities Cost per Item",f"€{rent_util_cost_pi:.2f}")
-            st.markdown("#### Packaging Costs (per Item)")
-            cpk=product_data.get("packaging",{"label_cost_per_item":0.0,"materials_cost_per_item":0.0})
-            lc=st.number_input("Label Cost/Item (€)",value=float(cpk.get("label_cost_per_item",0.0)),min_value=0.0,format="%.2f",key=f"{product_name}_lc")
-            pmc=st.number_input("Other Pkg Materials Cost/Item (€)",value=float(cpk.get("materials_cost_per_item",0.0)),min_value=0.0,format="%.2f",key=f"{product_name}_pmc")
-            product_data["packaging"]={"label_cost_per_item":lc,"materials_cost_per_item":pmc}; pkg_cost_pi=lc+pmc
-            st.metric("Total Packaging Cost per Item",f"€{pkg_cost_pi:.2f}")
-            st.markdown("#### Online Selling Fees - Retail")
-            crf=product_data.get("retail_fees",{})
-            def_rf_ao=float(crf.get("average_order_value",0.01)); def_rf_ao=0.01 if def_rf_ao<0.01 else def_rf_ao
-            rf_ao=st.number_input("Avg Retail Order Value (€)",value=def_rf_ao,min_value=0.01,format="%.2f",key=f"{product_name}_rf_ao")
-            rf_cc=st.number_input("Retail Credit Card Fee (%)",value=float(crf.get("cc_fee_percent",0.03)),min_value=0.0,format="%.3f",key=f"{product_name}_rf_cc")
-            rf_p=st.number_input("Retail Platform Fee (%)",value=float(crf.get("platform_fee_percent",0.05)),min_value=0.0,format="%.3f",key=f"{product_name}_rf_p")
-            rf_s=st.number_input("Retail Avg Shipping Paid by You (€)",value=float(crf.get("shipping_cost_paid_by_you",0.0)),min_value=0.0,format="%.2f",key=f"{product_name}_rf_s")
-            product_data["retail_fees"]={"average_order_value":rf_ao,"cc_fee_percent":rf_cc,"platform_fee_percent":rf_p,"shipping_cost_paid_by_you":rf_s}
-            ret_total_fees_calc=(rf_ao*rf_cc)+(rf_ao*rf_p)+rf_s; ret_fee_perc_calc=ret_total_fees_calc/rf_ao if rf_ao>0 else 0
-            st.metric("Retail Fees per Order",f"€{ret_total_fees_calc:.2f}"); st.metric("Retail Fees % of Order",f"{ret_fee_perc_calc:.1%}")
-            st.markdown("#### Online Selling Fees - Wholesale")
-            cwsf=product_data.get("wholesale_fees",{})
-            def_ws_ao=float(cwsf.get("average_order_value",0.01)); def_ws_ao=0.01 if def_ws_ao<0.01 else def_ws_ao
-            ws_ao=st.number_input("Avg Wholesale Order Value (€)",value=def_ws_ao,min_value=0.01,format="%.2f",key=f"{product_name}_ws_ao")
-            ws_c=st.number_input("Wholesale Commission (%)",value=float(cwsf.get("commission_percent",0.15)),min_value=0.0,format="%.3f",key=f"{product_name}_ws_c")
-            ws_p=st.number_input("Wholesale Payment Processing Fee (%)",value=float(cwsf.get("processing_fee_percent",0.02)),min_value=0.0,format="%.3f",key=f"{product_name}_ws_p")
-            ws_f=st.number_input("Wholesale Flat Fee per Order (€)",value=float(cwsf.get("flat_fee_per_order",0.0)),min_value=0.0,format="%.2f",key=f"{product_name}_ws_f")
-            product_data["wholesale_fees"]={"average_order_value":ws_ao,"commission_percent":ws_c,"processing_fee_percent":ws_p,"flat_fee_per_order":ws_f}
-            ws_total_fees_calc=(ws_ao*ws_c)+(ws_ao*ws_p)+ws_f; ws_fee_perc_calc=ws_total_fees_calc/ws_ao if ws_ao>0 else 0
-            st.metric("Wholesale Fees per Order",f"€{ws_total_fees_calc:.2f}"); st.metric("Wholesale Fees % of Order",f"{ws_fee_perc_calc:.1%}")
-
-        with prod_tab4:
-            st.subheader("📊 Summary & Pricing")
-            cost_comps={"Materials Cost/Item":mats_cost_pi,"Production Labor Cost/Item":prod_lab_cost_pi,
-                        "Shipping Labor Cost/Item":ship_lab_cost_pi,"Allocated Salary Cost/Item":sal_cost_pi,
-                        "Allocated Rent & Utilities Cost/Item":rent_util_cost_pi,"Packaging Cost/Item":pkg_cost_pi}
-            cost_sum_df=pd.DataFrame(list(cost_comps.items()),columns=["Component","Cost per Item (€)"])
-            st.dataframe(cost_sum_df.style.format({"Cost per Item (€)":"€{:.2f}"}))
-            subtotal_cost_pi=sum(cost_comps.values()); st.metric("Subtotal Cost per Item",f"€{subtotal_cost_pi:.2f}")
-            cpr=product_data.get("pricing",{})
-            buf_p=st.slider("Buffer Percentage",0.0,0.5,float(cpr.get("buffer_percentage",0.1)),0.01,format="%.2f",key=f"{product_name}_buf")
-            product_data["pricing"]["buffer_percentage"]=buf_p
-            final_cost_pi_w_buf=subtotal_cost_pi*(1+buf_p); st.metric("Final Cost per Item (with Buffer)",f"€{final_cost_pi_w_buf:.2f}")
-            st.markdown("#### Pricing Strategy")
-            def_ws_pr=float(cpr.get("wholesale_price_per_item",0.01)); def_ws_pr=0.01 if def_ws_pr<0.01 else def_ws_pr
-            def_rt_pr=float(cpr.get("retail_price_per_item",0.01)); def_rt_pr=0.01 if def_rt_pr<0.01 else def_rt_pr
-            ws_pr=st.number_input("Wholesale Price/Item (€)",value=def_ws_pr,min_value=0.01,format="%.2f",key=f"{product_name}_ws_pr")
-            rt_pr=st.number_input("Retail Price/Item (€)",value=def_rt_pr,min_value=0.01,format="%.2f",key=f"{product_name}_rt_pr")
-            product_data["pricing"]["wholesale_price_per_item"]=ws_pr; product_data["pricing"]["retail_price_per_item"]=rt_pr
-            ws_prof=ws_pr-final_cost_pi_w_buf-(ws_pr*ws_fee_perc_calc)
-            rt_prof=rt_pr-final_cost_pi_w_buf-(rt_pr*ret_fee_perc_calc)
-            ws_marg=ws_prof/ws_pr if ws_pr>0 else 0; rt_marg=rt_prof/rt_pr if rt_pr>0 else 0
-            prof_df=pd.DataFrame({"Channel":["Wholesale","Retail"],"Price/Item (€)":[ws_pr,rt_pr],
-                "Final Cost/Item (€)":[final_cost_pi_w_buf]*2,"Fees/Item (Est.) (€)":[ws_pr*ws_fee_perc_calc,rt_pr*ret_fee_perc_calc],
-                "Profit/Item (€)":[ws_prof,rt_prof],"Profit Margin (%)":[ws_marg*100,rt_marg*100]})
-            st.dataframe(prof_df.style.format({"Price/Item (€)":"€{:.2f}","Final Cost/Item (€)":"€{:.2f}","Fees/Item (Est.) (€)":"€{:.2f}","Profit/Item (€)":"€{:.2f}","Profit Margin (%)":"{:.1f}%"}))
-            st.markdown("#### Revenue and Profit Projection")
-            mpi_key=f"{product_name}_monthly_prod_items_v7" 
-            product_data["monthly_production_items"]=st.number_input("Monthly Production (Items)",value=int(product_data.get("monthly_production_items",1000)),min_value=1,key=mpi_key)
-            ann_prod=product_data["monthly_production_items"]*12
-            c_dist=product_data.get("distribution",{})
-            ws_dist_p=st.slider("Wholesale Distribution (%)",0.0,1.0,float(c_dist.get("wholesale_percentage",0.5)),0.01,format="%.2f",key=f"{product_name}_ws_dist")
-            rt_dist_p=1.0-ws_dist_p; st.slider("Retail Distribution (%)",0.0,1.0,rt_dist_p,0.01,format="%.2f",disabled=True,key=f"{product_name}_rt_dist_disp")
-            product_data["distribution"]={"wholesale_percentage":ws_dist_p,"retail_percentage":rt_dist_p}
-            ws_items_yr=ann_prod*ws_dist_p; rt_items_yr=ann_prod*rt_dist_p
-            ws_rev_yr=ws_items_yr*ws_pr; rt_rev_yr=rt_items_yr*rt_pr
-            ws_prof_yr=ws_items_yr*ws_prof; rt_prof_yr=rt_items_yr*rt_prof
-            total_rev_yr=ws_rev_yr+rt_rev_yr; total_prof_yr=ws_prof_yr+rt_prof_yr
-            overall_marg_yr=total_prof_yr/total_rev_yr if total_rev_yr>0 else 0
-            proj_df=pd.DataFrame({"Channel":["Wholesale","Retail","Total"],"Annual Items":[ws_items_yr,rt_items_yr,ann_prod],
-                "Annual Revenue (€)":[ws_rev_yr,rt_rev_yr,total_rev_yr],"Annual Profit (€)":[ws_prof_yr,rt_prof_yr,total_prof_yr]})
-            st.dataframe(proj_df.style.format({"Annual Items":"{:,.0f}","Annual Revenue (€)":"€{:,.2f}","Annual Profit (€)":"€{:,.2f}"}))
-            st.metric("Overall Annual Profit Margin",f"{overall_marg_yr:.1%}")
-
-        if st.button(f"Save Product: {product_name}",key=f"save_{product_name}_v2"): 
-            product_data["last_updated"]=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            saved_products[product_name]=product_data
-            save_json_data(SAVED_PRODUCTS_FILE_PATH,saved_products)
-            st.success(f"Product '{product_name}' saved!"); st.toast(f"'{product_name}' updated.",icon="✅")
-
-elif app_mode=="Manage Products" and not ('current_product_name' in st.session_state and st.session_state.current_product_name):
-    st.info("Select a product from the sidebar to edit, or create a new one.")
-    # Display any residual form messages if user navigates away before it's cleared
-    if 'form_message' in st.session_state and st.session_state.form_message:
-        msg_type, msg_content = st.session_state.form_message
-        if msg_type == "success": st.success(msg_content)
-        elif msg_type == "warning": st.warning(msg_content)
-        del st.session_state.form_message
+                st.sidebar.checkbox("Create New Product", key="new_product_cb_db")
+                if st.session_state.new_product_cb_db:
+                    st.sidebar.text_input("New Product Name", key="new_product_name_input_db")
+                    if st.sidebar.button("Initialize New Product (DB)", key="init_new_prod_btn_db"):
+                        prod_to_init = st.session_state.new_product_name_input_db.strip()
+                        if not prod_to_init:
+                            st.session_state.form_message_db = ("warning", "Product name cannot be empty.")
+                        elif db.query(Product).filter(Product.user_id == user_id, Product.product_name == prod_to_init).first():
+                            st.session_state.form_message_db = ("warning", "Product name already exists in DB.")
+                        else:
+                            # Create product with default JSON values from model
+                            new_prod_db = Product(user_id=user_id, product_name=prod_to_init)
+                            db.add(new_prod_db)
+                            db.commit()
+                            st.session_state.current_product_id_db = new_prod_db.id # Select the new product
+                            st.session_state.new_product_cb_db = False
+                            st.session_state.form_message_db = ("success", f"Product '{prod_to_init}' initialized in DB.")
+                        st.rerun()
+                    st.session_state.current_product_id_db = None # Don't show product details if creating new
+                else: # Product Selection
+                    if product_names_from_db:
+                        if 'current_product_id_db' not in st.session_state or not st.session_state.current_product_id_db or not db.query(Product).filter(Product.id == st.session_state.current_product_id_db, Product.user_id == user_id).first():
+                            st.session_state.current_product_id_db = product_id_map.get(product_names_from_db[0]) if product_names_from_db else None
+                        
+                        # Get current product name for display in selectbox
+                        current_selected_prod_name = None
+                        if st.session_state.current_product_id_db:
+                             current_prod_obj_for_select = db.query(Product.product_name).filter(Product.id == st.session_state.current_product_id_db).scalar()
+                             if current_prod_obj_for_select:
+                                 current_selected_prod_name = current_prod_obj_for_select
 
 
-if app_mode != "Tutorial":
-    st.markdown("---"); st.markdown("Product Cost Calculator v2.10 - Callback for Product Init")
+                        selected_prod_name_sidebar = st.sidebar.selectbox(
+                            "Select Product", product_names_from_db,
+                            index=product_names_from_db.index(current_selected_prod_name) if current_selected_prod_name and current_selected_prod_name in product_names_from_db else 0,
+                            key="select_product_sidebar_db"
+                        )
+                        selected_prod_id = product_id_map.get(selected_prod_name_sidebar)
+                        if selected_prod_id != st.session_state.current_product_id_db:
+                            st.session_state.current_product_id_db = selected_prod_id
+                            st.rerun()
+                    else:
+                        st.sidebar.info("No products in DB. Create one.")
+                        st.session_state.current_product_id_db = None
+                
+                # --- Display Selected Product Details ---
+                if st.session_state.get("current_product_id_db"):
+                    current_product_id = st.session_state.current_product_id_db
+                    # Eagerly load related data for the product
+                    product_data_db = db.query(Product)\
+                        .options(
+                            selectinload(Product.materials_used).joinedload(ProductMaterial.ingredient),
+                            selectinload(Product.production_tasks_performed).joinedload(ProductProductionTask.standard_task),
+                            selectinload(Product.production_tasks_performed).joinedload(ProductProductionTask.employee),
+                            selectinload(Product.shipping_tasks_performed).joinedload(ProductShippingTask.standard_task),
+                            selectinload(Product.shipping_tasks_performed).joinedload(ProductShippingTask.employee)
+                            # selectinload(Product.salary_allocation_employee_ref) # if you add this relationship
+                        )\
+                        .filter(Product.id == current_product_id, Product.user_id == user_id).first()
+
+                    if not product_data_db:
+                        st.error("Selected product not found or access denied.")
+                    else:
+                        st.header(f"📝 Managing Product: {product_data_db.product_name} (DB ID: {product_data_db.id})")
+                        prod_tab1, prod_tab2, prod_tab3, prod_tab4 = st.tabs(["Materials", "Labor", "Other Costs", "Summary & Pricing"])
+                        
+                        # Initialize cost variables (as in your original logic)
+                        mats_cost_pi, prod_lab_cost_pi, ship_lab_cost_pi = 0.0, 0.0, 0.0
+                        sal_cost_pi, rent_util_cost_pi, pkg_cost_pi = 0.0, 0.0, 0.0
+                        # ... any other cost variables ...
+
+                        # Rename maps for product sub-editors
+                        mat_used_rename_map_prod = {"ingredient_display": "Ingredient (Provider)", "quantity_grams_used": "Grams Used", "id": "Mat. ID"}
+                        task_perf_rename_map_prod = {"task_display": "Task", "employee_display": "Performed By", "time_minutes": "Time (min)", "items_processed_in_task": "# Items", "id": "Perf. ID"}
+
+
+                        with prod_tab1: # Materials
+                            st.subheader("🧪 Materials Used")
+                            product_data_db.batch_size_items = st.number_input("Batch Yield (Items)", value=int(product_data_db.batch_size_items), min_value=1, key=f"prod_{current_product_id}_bsi_db")
+                            
+                            # Get global ingredients for selectbox
+                            g_ingr_db_for_prod = db.query(Ingredient).filter(Ingredient.user_id == user_id).order_by(Ingredient.name).all()
+                            ingr_options_prod = {create_ingredient_display_string(ing.name, ing.provider): ing.id for ing in g_ingr_db_for_prod}
+                            ingr_display_list_prod = list(ingr_options_prod.keys())
+
+                            prod_mats_data = []
+                            for pm in product_data_db.materials_used:
+                                prod_mats_data.append({
+                                    "id": pm.id,
+                                    "ingredient_display": create_ingredient_display_string(pm.ingredient.name, pm.ingredient.provider),
+                                    "quantity_grams_used": pm.quantity_grams_used,
+                                    "_ingredient_id_hidden": pm.ingredient_id # For saving
+                                })
+                            df_prod_mats_display = pd.DataFrame(prod_mats_data).rename(columns=mat_used_rename_map_prod)
+                            
+                            edited_prod_mats_df = st.data_editor(
+                                df_prod_mats_display,
+                                column_config={
+                                    mat_used_rename_map_prod["id"]: st.column_config.NumberColumn(disabled=True),
+                                    mat_used_rename_map_prod["ingredient_display"]: st.column_config.SelectboxColumn(options=ingr_display_list_prod, required=True),
+                                    mat_used_rename_map_prod["quantity_grams_used"]: st.column_config.NumberColumn(format="%.2f", required=True, min_value=0.0)
+                                },
+                                num_rows="dynamic", key=f"prod_{current_product_id}_mats_db", hide_index=True
+                            )
+
+                            # Calculate Materials Cost (similar to your original logic, but using DB data)
+                            total_mats_cost_for_prod_db = 0.0
+                            if product_data_db.materials_used: # Use the committed data for calculation display
+                                for pm_calc in product_data_db.materials_used:
+                                    grams_used_calc = float(pm_calc.quantity_grams_used)
+                                    ing_calc = pm_calc.ingredient # Already loaded
+                                    if ing_calc and ing_calc.unit_quantity_kg > 0:
+                                        cost_per_gram = float(ing_calc.price_per_unit) / (float(ing_calc.unit_quantity_kg) * 1000)
+                                        total_mats_cost_for_prod_db += grams_used_calc * cost_per_gram
+                            
+                            cur_bsi_db = product_data_db.batch_size_items
+                            mats_cost_pi = total_mats_cost_for_prod_db / cur_bsi_db if cur_bsi_db > 0 else 0.0
+                            st.metric("Total Materials Cost for Batch (DB)", f"€{total_mats_cost_for_prod_db:.2f}")
+                            st.metric("Materials Cost per Item (DB)", f"€{mats_cost_pi:.2f}")
+
+                        # ... Other Product Tabs (Labor, Other Costs, Summary & Pricing) ...
+                        # These will require similar refactoring:
+                        # 1. Load data from product_data_db and its relationships.
+                        # 2. Populate st.data_editor or other widgets.
+                        # 3. Implement save logic for each sub-section.
+                        # 4. Recalculate costs based on data from product_data_db.
+
+                        with prod_tab2: # Labor
+                            st.subheader("🛠️ Labor")
+                            # Load global employees and tasks for dropdowns
+                            g_emp_db_for_prod = db.query(Employee).filter(Employee.user_id == user_id).all()
+                            emp_options_prod = {emp.name: emp.id for emp in g_emp_db_for_prod}
+                            
+                            g_prod_tasks_db = db.query(StandardProductionTask).filter(StandardProductionTask.user_id == user_id).all()
+                            prod_task_options = {t.task_name: t.id for t in g_prod_tasks_db}
+
+                            g_ship_tasks_db = db.query(StandardShippingTask).filter(StandardShippingTask.user_id == user_id).all()
+                            ship_task_options = {t.task_name: t.id for t in g_ship_tasks_db}
+
+                            st.markdown("#### Production Tasks Performed")
+                            prod_tasks_perf_data = []
+                            for ptp in product_data_db.production_tasks_performed:
+                                prod_tasks_perf_data.append({
+                                    "id": ptp.id,
+                                    "task_display": ptp.standard_task.task_name,
+                                    "employee_display": ptp.employee.name,
+                                    "time_minutes": ptp.time_minutes,
+                                    "items_processed_in_task": ptp.items_processed_in_task,
+                                    "_task_id_hidden": ptp.standard_task_id,
+                                    "_employee_id_hidden": ptp.employee_id
+                                })
+                            df_prod_tasks_perf = pd.DataFrame(prod_tasks_perf_data).rename(columns=task_perf_rename_map_prod)
+                            edited_prod_tasks_perf_df = st.data_editor(df_prod_tasks_perf, column_config={
+                                task_perf_rename_map_prod["id"]: st.column_config.NumberColumn(disabled=True),
+                                task_perf_rename_map_prod["task_display"]: st.column_config.SelectboxColumn(options=list(prod_task_options.keys()), required=True),
+                                task_perf_rename_map_prod["employee_display"]: st.column_config.SelectboxColumn(options=list(emp_options_prod.keys()), required=True),
+                                task_perf_rename_map_prod["time_minutes"]: st.column_config.NumberColumn(format="%.1f", min_value=0.0, required=True),
+                                task_perf_rename_map_prod["items_processed_in_task"]: st.column_config.NumberColumn(format="%d", min_value=1, required=True)
+                            }, num_rows="dynamic", key=f"prod_{current_product_id}_prod_tasks_db", hide_index=True)
+                            # Calculate prod labor cost
+                            # ...
+
+                            st.markdown("#### Shipping Tasks Performed")
+                            # ... similar for shipping tasks ...
+
+                            st.markdown("#### Salary Allocation (Optional)")
+                            # ... similar for salary allocation, linking to Employee ...
+                            salaried_emp_options = {emp.name: emp.id for emp in g_emp_db_for_prod if db.query(GlobalSalary).filter(GlobalSalary.employee_id == emp.id, GlobalSalary.user_id == user_id).first()}
+                            
+                            selected_sal_emp_id = product_data_db.salary_allocation_employee_id
+                            selected_sal_emp_name = None
+                            if selected_sal_emp_id:
+                                for name, id_val in salaried_emp_options.items():
+                                    if id_val == selected_sal_emp_id:
+                                        selected_sal_emp_name = name
+                                        break
+                            
+                            sel_emp_name_for_sal_db = st.selectbox("Allocate Salary of Employee", options=["None"] + list(salaried_emp_options.keys()), 
+                                index = (["None"] + list(salaried_emp_options.keys())).index(selected_sal_emp_name) if selected_sal_emp_name else 0,
+                                key=f"prod_{current_product_id}_sal_emp_db")
+                            product_data_db.salary_allocation_items_per_month = st.number_input("Items of THIS Product per Month (for salary)", 
+                                value=int(product_data_db.salary_allocation_items_per_month), min_value=1, key=f"prod_{current_product_id}_sal_items_db")
+                            
+                            # Calculate salary cost per item
+                            # ...
+
+                        with prod_tab3: # Other Costs
+                            st.subheader("📦 Other Costs")
+                            st.markdown("#### Rent & Utilities Allocation")
+                            product_data_db.rent_utilities_allocation_items_per_month = st.number_input("Items of THIS Product per Month (for rent/utilities)",
+                                value=int(product_data_db.rent_utilities_allocation_items_per_month), min_value=1, key=f"prod_{current_product_id}_rent_items_db")
+                            # Calculate rent/util cost
+                            # ...
+
+                            st.markdown("#### Packaging Costs (per Item)")
+                            # These are stored as JSON in Product model
+                            pkg_costs_dict = product_data_db.packaging_costs if isinstance(product_data_db.packaging_costs, dict) else {}
+                            lc_db = st.number_input("Label Cost/Item (€)", value=float(pkg_costs_dict.get("label_cost_per_item", 0.05)), min_value=0.0, format="%.2f", key=f"prod_{current_product_id}_lc_db")
+                            pmc_db = st.number_input("Other Pkg Materials Cost/Item (€)", value=float(pkg_costs_dict.get("materials_cost_per_item", 0.10)), min_value=0.0, format="%.2f", key=f"prod_{current_product_id}_pmc_db")
+                            product_data_db.packaging_costs = {"label_cost_per_item": lc_db, "materials_cost_per_item": pmc_db}
+                            # ...
+
+                            st.markdown("#### Online Selling Fees - Retail / Wholesale")
+                            # ... similar for retail_fees (JSON), wholesale_fees (JSON) ...
+
+                        with prod_tab4: # Summary & Pricing
+                            st.subheader("📊 Summary & Pricing")
+                            # ... All your cost summary, pricing, and projection logic ...
+                            # This will use the calculated cost_pi variables (mats_cost_pi, prod_lab_cost_pi, etc.)
+                            # And read/write pricing strategy and distribution from product_data_db.pricing_strategy (JSON)
+                            # and product_data_db.distribution_split (JSON)
+
+                        # --- Product Save Button ---
+                        if st.button(f"Save Product: {product_data_db.product_name} to DB", key=f"save_prod_{current_product_id}_db"):
+                            try:
+                                # Save main product fields (batch_size, JSON fields, etc.)
+                                # product_data_db object is already updated by widgets for simple fields.
+                                
+                                # Save Product Materials (from edited_prod_mats_df)
+                                initial_mat_ids = {pm.id for pm in product_data_db.materials_used}
+                                current_mat_ids_in_editor = set()
+                                for _, mat_row in edited_prod_mats_df.iterrows():
+                                    mat_id = mat_row[mat_used_rename_map_prod["id"]]
+                                    ing_display = mat_row[mat_used_rename_map_prod["ingredient_display"]]
+                                    ing_id_for_save = ingr_options_prod.get(ing_display)
+                                    qty_grams = mat_row[mat_used_rename_map_prod["quantity_grams_used"]]
+
+                                    if not ing_id_for_save: continue # Skip if ingredient not found
+
+                                    if pd.isna(mat_id): # New material for this product
+                                        db.add(ProductMaterial(product_id=current_product_id, ingredient_id=ing_id_for_save, quantity_grams_used=qty_grams))
+                                    else: # Existing material
+                                        mat_id = int(mat_id)
+                                        current_mat_ids_in_editor.add(mat_id)
+                                        pm_to_update = db.query(ProductMaterial).filter(ProductMaterial.id == mat_id, ProductMaterial.product_id == current_product_id).first()
+                                        if pm_to_update:
+                                            pm_to_update.ingredient_id = ing_id_for_save
+                                            pm_to_update.quantity_grams_used = qty_grams
+                                mats_to_delete = initial_mat_ids - current_mat_ids_in_editor
+                                if mats_to_delete:
+                                    db.query(ProductMaterial).filter(ProductMaterial.id.in_(mats_to_delete), ProductMaterial.product_id == current_product_id).delete(synchronize_session=False)
+
+                                # Save Product Production Tasks (from edited_prod_tasks_perf_df)
+                                # ... similar add/update/delete logic for ProductProductionTask ...
+                                # Save Product Shipping Tasks
+                                # ... similar add/update/delete logic for ProductShippingTask ...
+
+                                # Save salary allocation choice
+                                if sel_emp_name_for_sal_db == "None":
+                                    product_data_db.salary_allocation_employee_id = None
+                                else:
+                                    product_data_db.salary_allocation_employee_id = salaried_emp_options.get(sel_emp_name_for_sal_db)
+                                
+                                # The product_data_db object itself has been updated for simple fields and JSON fields
+                                # by direct assignment from widgets.
+                                db.commit()
+                                st.success(f"Product '{product_data_db.product_name}' saved to DB!")
+                                st.toast(f"'{product_data_db.product_name}' updated.", icon="✅")
+                                # st.rerun() # Rerun to reflect any calculation changes based on saved data
+                            except SQLAlchemyError as e_prod_save:
+                                db.rollback()
+                                st.error(f"DB Error saving product: {e_prod_save}")
+                            except Exception as e_gen_save:
+                                db.rollback()
+                                st.error(f"Error saving product: {e_gen_save}")
+                else: # No product selected
+                     if not st.session_state.new_product_cb_db : # Only show if not in "create new" mode
+                        st.info("Select a product from the sidebar to edit, or create a new one.")
+
+
+            except SQLAlchemyError as e_prod_load:
+                db.rollback()
+                st.error(f"DB Error in Product Management: {e_prod_load}")
+            except Exception as e_gen_prod:
+                st.error(f"General Error in Product Management: {e_gen_prod}")
+
+
+        # --- Footer (if any) ---
+        if app_mode != "Tutorial":
+            st.markdown("---"); st.markdown(f"Product Cost Calculator (DB Mode) - User: {st.session_state.name}")
+
+    except SQLAlchemyError as e_auth_block: # Catch DB errors within the authenticated block
+        if db.is_active: db.rollback()
+        st.error(f"A database error occurred: {e_auth_block}. Please try again or contact support.")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}") # For debugging
+    except Exception as e_main: # Catch other errors
+        st.error(f"An unexpected application error occurred: {e_main}")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}")
+    finally:
+        if db.is_active: # Ensure session is closed
+            db.close()
+            print("Database session closed for authenticated user block.")
+else: # Not authenticated
+    pass # Login UI handled above

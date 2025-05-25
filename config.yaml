@@ -1,0 +1,30 @@
+# config.yaml
+credentials:
+  usernames:
+    # Replace 'your_actual_username' with the username the user will type
+    # For example, if your username is 'mtomas':
+    mtomas:
+      email: "manuel.tomas.estarlich@gmail.com" # User's email
+      name: "Manuel Tomas" # Display name
+      # Paste your bcrypt hashed password here. It should start with $2b$
+      password: "$2b$12$1dRcO/qTBZU24R03PHTPj.38DZYniQChIG76XHVPZYRAfXqFY93T."
+    # Add other pre-registered users here if needed
+    # user2:
+    #   email: "user2@example.com"
+    #   name: "User Two Name"
+    #   password: "hashed_password_for_user2"
+
+cookie:
+  expiry_days: 30
+  # CRITICAL: Replace this with a strong, unique, random string of at least 32 characters.
+  # Generate one using: python -c "import secrets; print(secrets.token_hex(32))"
+  # Store this securely, ideally as an environment variable on Render if not in this file.
+  key: "your_very_strong_random_secret_key_here_32_chars_or_mor70c3f08fdfad5d67e6b3b6eee728e84109bb7dba800bcf9143666752aa1f9ef6e"
+  name: "pcc_render_cookie" # Or any other unique name for your app's cookie
+
+preauthorized:
+  emails:
+    # This list is ONLY for emails that are allowed to use the self-registration feature
+    # if you enable the authenticator.register_user() widget.
+    # It does NOT store passwords or full user profiles here.
+    # - "new_user_to_allow_registration@example.com"
