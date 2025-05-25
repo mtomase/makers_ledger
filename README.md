@@ -1,2 +1,2 @@
 # product_cost_calculator
-A repo for the Product Cost Calculator App
+A Streamlit application for calculating product manufacturing and sales costs
