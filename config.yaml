@@ -11,13 +11,13 @@ credentials:
       logged_in: false
       password: $2b$12$plQ4F8JrTfY0l0drWXee5.WaU/7qKA3hr1/TxE1IaMYe6j/144njK
       password_hint: '*****6*'
-      roles: null
     mtomas:
       email: manuel.tomas.estarlich@gmail.com
       failed_login_attempts: 0
-      first_name: Manu
-      last_name: null
-      name: Manuel
+      first_name: Manuel
+      last_name: Tomas
       password: $2b$12$kCpEH9pRY77ci1WnABmUL.iiHhtB9/N0LqZ5W6.FrPZrYG1zeeF7q
+      password_hint: '*****6*'
+      roles: null
 preauthorized:
   emails: null
