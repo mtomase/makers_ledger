@@ -1,6 +1,7 @@
 # requirements.txt
 streamlit
 streamlit-authenticator>=0.3.0
+streamlit-option-menu
 sqlalchemy
 psycopg2-binary
 passlib
