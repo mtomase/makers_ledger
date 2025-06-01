@@ -1429,7 +1429,7 @@ if authentication_status:
                 """)
             st.markdown("---")
 
-            with st.expander("้อมูล Core Data Management Sections", expanded=False):
+            with st.expander("🗃️ Core Data Management Sections", expanded=False):
                 st.markdown("### Manage Ingredients")
                 st.markdown("""
                     *Purpose: Track your raw materials, their costs, and suppliers. This data is fundamental for calculating material costs per product.*
