@@ -10,23 +10,23 @@ import datetime
 import pandas as pd
 import re
 from decimal import Decimal, ROUND_HALF_UP
-from streamlit_js_eval import streamlit_js_eval # Import for screen width
+from streamlit_js_eval import streamlit_js_eval 
 
 # --- Screen Width Detection ---
 if 'screen_width' not in st.session_state:
-    st.session_state.screen_width = streamlit_js_eval(js_expressions='window.innerWidth', key='INIT_SCR_WIDTH_FETCH_STREAMLIT_MAIN')
+    st.session_state.screen_width = streamlit_js_eval(js_expressions='window.innerWidth', key='INIT_SCR_WIDTH_FETCH_STREAMLIT_MAIN_V3')
 
 if st.session_state.screen_width is None or st.session_state.screen_width == 0:
     st.session_state.screen_width = 1024 
-    if 'initial_rerun_for_width_done_streamlit_main' not in st.session_state:
-        st.session_state.initial_rerun_for_width_done_streamlit_main = True
+    if 'initial_rerun_for_width_done_streamlit_main_v3' not in st.session_state:
+        st.session_state.initial_rerun_for_width_done_streamlit_main_v3 = True
         st.rerun()
 
 MOBILE_BREAKPOINT = 768
 IS_MOBILE = st.session_state.screen_width < MOBILE_BREAKPOINT
 # --- End Screen Width Detection ---
 
-# --- Detailed Configuration File Path and Permission Check ---
+# --- Configuration File Path and Permission Check ---
 CONFIG_FILE_PATH = None
 config_auth_diagnostic_check = None 
 try:
@@ -39,7 +39,7 @@ try:
         st.error(f"❌ CRITICAL: Read permission DENIED for config file at `{CONFIG_FILE_PATH}`.")
         st.stop()
     if not os.access(CONFIG_FILE_PATH, os.W_OK):
-        st.warning(f"⚠️ Write permission DENIED for config file at `{CONFIG_FILE_PATH}`. User registration or password/detail updates by the authenticator will likely fail.")
+        st.warning(f"⚠️ Write permission DENIED for config file at `{CONFIG_FILE_PATH}`. User registration or password/detail updates will likely fail.")
     with open(CONFIG_FILE_PATH, 'r') as file:
         config_auth_diagnostic_check = yaml.load(file, Loader=SafeLoader)
 except Exception as e: 
@@ -47,8 +47,6 @@ except Exception as e:
     st.exception(e)
     st.info("Ensure 'config.yaml' exists, is readable/writable, and is valid YAML.")
     st.stop()
-# --- End of Detailed Configuration File Path and Permission Check ---
-
 
 # --- Database Setup ---
 from dotenv import load_dotenv
@@ -388,8 +386,10 @@ if authentication_status:
                         emp_to_del = db_session_main_app.query(Employee).filter(Employee.id == emp_id_del, Employee.user_id == current_user_db.id).first()
                         if emp_to_del: db_session_main_app.delete(emp_to_del); st.toast(f"Deleted employee ID: {emp_id_del}", icon="➖")
                     for index, row in edited_df_emp.iterrows():
-                        emp_id = int(row.get('ID')) if pd.notna(row.get('ID')) else None; name_val, rate_val, role_val = row.get("Name"), row.get("Hourly Rate (€)"), row.get("Role")
-                        if role_val is None and "Role" not in edited_df_emp.columns: role_val = "" # Default if column hidden
+                        emp_id = int(row.get('ID')) if pd.notna(row.get('ID')) else None; name_val, rate_val = row.get("Name"), row.get("Hourly Rate (€)")
+                        role_val = row.get("Role") 
+                        if role_val is None and "Role" not in emp_columns_to_display: role_val = "" 
+                        
                         if not all([name_val, pd.notna(rate_val)]):
                             if emp_id is None and not any([name_val, pd.notna(rate_val), role_val]): continue
                             st.error(f"Row {index+1}: Name and Hourly Rate are required. Skipping."); continue
@@ -404,8 +404,9 @@ if authentication_status:
                                 if changed: st.toast(f"Updated employee ID: {emp_id}", icon="🔄")
                     new_rows_df_emp = edited_df_emp[edited_df_emp['ID'].isna()]
                     for index, row in new_rows_df_emp.iterrows():
-                        name_val, rate_val, role_val = row.get("Name"), row.get("Hourly Rate (€)"), row.get("Role")
-                        if role_val is None and "Role" not in edited_df_emp.columns: role_val = ""
+                        name_val, rate_val = row.get("Name"), row.get("Hourly Rate (€)")
+                        role_val = row.get("Role")
+                        if role_val is None and "Role" not in emp_columns_to_display: role_val = ""
                         if not all([name_val, pd.notna(rate_val)]):
                             if not any([name_val, pd.notna(rate_val), role_val]): continue
                             st.error(f"New Row (approx original index {index+1}): Name and Hourly Rate are required. Skipping."); continue
@@ -517,7 +518,7 @@ if authentication_status:
             if snapshot_key_gs not in st.session_state or not isinstance(st.session_state.get(snapshot_key_gs), pd.DataFrame) or not st.session_state[snapshot_key_gs].columns.equals(df_gs_for_editor.columns): st.session_state[snapshot_key_gs] = df_gs_for_editor.copy()
             
             gs_display_columns_desktop = ("Employee Name", "Monthly Salary (€)")
-            gs_display_columns_mobile = ("Employee Name",) # Salary might be less critical for quick mobile view
+            gs_display_columns_mobile = ("Employee Name",) 
             gs_columns_to_display = gs_display_columns_mobile if IS_MOBILE else gs_display_columns_desktop
 
             edited_df_gs = st.data_editor(st.session_state[snapshot_key_gs], num_rows="dynamic", key="global_salaries_editor", 
@@ -532,8 +533,9 @@ if authentication_status:
                         gs_to_del = db_session_main_app.query(GlobalSalary).filter(GlobalSalary.id == gs_id_del, GlobalSalary.user_id == current_user_db.id).first()
                         if gs_to_del: db_session_main_app.delete(gs_to_del); st.toast(f"Deleted global salary ID: {gs_id_del}", icon="➖")
                     for index, row in edited_df_gs.iterrows():
-                        gs_id = int(row.get('ID')) if pd.notna(row.get('ID')) else None; emp_name_val, amount_val = row.get("Employee Name"), row.get("Monthly Salary (€)")
-                        if amount_val is None and "Monthly Salary (€)" not in edited_df_gs.columns: 
+                        gs_id = int(row.get('ID')) if pd.notna(row.get('ID')) else None; emp_name_val = row.get("Employee Name")
+                        amount_val = row.get("Monthly Salary (€)") 
+                        if amount_val is None and "Monthly Salary (€)" not in gs_columns_to_display: 
                             st.error(f"Row {index+1} (Global Salaries): Salary amount missing. Please edit on a wider screen or ensure data is complete."); continue
                         if not all([emp_name_val, emp_name_val != "No employees defined", pd.notna(amount_val)]):
                             if gs_id is None and not any([emp_name_val, pd.notna(amount_val)]): continue
@@ -549,8 +551,9 @@ if authentication_status:
                                 if changed: st.toast(f"Updated global salary ID: {gs_id}", icon="🔄")
                     new_rows_df_gs = edited_df_gs[edited_df_gs['ID'].isna()]
                     for index, row in new_rows_df_gs.iterrows():
-                        emp_name_val, amount_val = row.get("Employee Name"), row.get("Monthly Salary (€)")
-                        if amount_val is None and "Monthly Salary (€)" not in edited_df_gs.columns: 
+                        emp_name_val = row.get("Employee Name")
+                        amount_val = row.get("Monthly Salary (€)")
+                        if amount_val is None and "Monthly Salary (€)" not in gs_columns_to_display: 
                             st.error(f"New Row (Global Salaries): Salary amount missing."); continue
                         if not all([emp_name_val, emp_name_val != "No employees defined", pd.notna(amount_val)]):
                             if not any([emp_name_val, pd.notna(amount_val)]): continue
@@ -597,13 +600,11 @@ if authentication_status:
                     for index, edited_row in edited_df_prod.iterrows():
                         p_id = edited_row.get('ID'); p_id = int(p_id) if pd.notna(p_id) else None
                         name_val, batch_val = edited_row.get("Product Name"), edited_row.get("Batch Size")
-                        monthly_val = edited_row.get("Monthly Production") # Get it regardless of display
-                        
-                        # Validation logic needs to be careful if a column is hidden
-                        is_monthly_prod_expected = "Monthly Production" in prod_columns_to_display # Check if it was displayed
+                        monthly_val = edited_row.get("Monthly Production") 
+                        is_monthly_prod_expected = "Monthly Production" in prod_columns_to_display
                         
                         if not name_val or not pd.notna(batch_val) or (is_monthly_prod_expected and not pd.notna(monthly_val)):
-                            if p_id is None and not any([name_val, pd.notna(batch_val)]): continue # Skip truly empty new rows
+                            if p_id is None and not any([name_val, pd.notna(batch_val)]): continue
                             st.error(f"Row {index+1} (Products): Required fields missing. Ensure Name, Batch Size, and Monthly Production (if visible) are filled. Skipping."); continue
                         
                         if p_id: 
@@ -612,26 +613,20 @@ if authentication_status:
                                 changed = False
                                 if p_to_update.product_name != name_val: p_to_update.product_name = name_val; changed=True
                                 if p_to_update.batch_size_items != int(batch_val): p_to_update.batch_size_items = int(batch_val); changed=True
-                                # Only update monthly_production if it was part of the edited form OR if it's a new row where it's expected
                                 if is_monthly_prod_expected and pd.notna(monthly_val) and p_to_update.monthly_production_items != int(monthly_val):
                                     p_to_update.monthly_production_items = int(monthly_val); changed=True
-                                elif not is_monthly_prod_expected and p_to_update.monthly_production_items is None: # If hidden and was None, maybe default
-                                     p_to_update.monthly_production_items = 0 # Or keep as is if that's preferred
+                                elif not is_monthly_prod_expected and p_to_update.monthly_production_items is None:
+                                     p_to_update.monthly_production_items = 0 
                                 if changed: st.toast(f"Updated product ID: {p_id}", icon="🔄")
                     new_rows_df_prod = edited_df_prod[edited_df_prod['ID'].isna()]
                     for index, row in new_rows_df_prod.iterrows():
                         name_val, batch_val = row.get("Product Name"), row.get("Batch Size")
                         monthly_val = row.get("Monthly Production")
                         is_monthly_prod_expected_new = "Monthly Production" in prod_columns_to_display
-
                         if not name_val or not pd.notna(batch_val) or (is_monthly_prod_expected_new and not pd.notna(monthly_val)):
                             if not any([name_val, pd.notna(batch_val)]): continue
                             st.error(f"New Row (approx original index {index+1}): Required fields missing. Ensure Name, Batch Size, and Monthly Production (if visible) are filled. Skipping."); continue
-                        
-                        # Provide a default for monthly_production if it's not in the form (hidden) and not provided
-                        final_monthly_val = int(monthly_val) if pd.notna(monthly_val) else (p_to_update.monthly_production_items if p_id and p_to_update else 0)
-
-
+                        final_monthly_val = int(monthly_val) if pd.notna(monthly_val) else 0
                         new_prod = Product(user_id=current_user_db.id, product_name=name_val, 
                                            batch_size_items=int(batch_val), 
                                            monthly_production_items=final_monthly_val)
@@ -727,7 +722,7 @@ if authentication_status:
                         if snapshot_key_ppt not in st.session_state or not isinstance(st.session_state.get(snapshot_key_ppt), pd.DataFrame) or not st.session_state[snapshot_key_ppt].columns.equals(df_ppt_for_editor.columns): st.session_state[snapshot_key_ppt] = df_ppt_for_editor.copy()
                         
                         ppt_display_columns_desktop = ("Task", "Employee", "Time (min)", "# Items in Task")
-                        ppt_display_columns_mobile = ("Task", "Time (min)") # Employee and #Items might be too much for mobile
+                        ppt_display_columns_mobile = ("Task", "Time (min)") 
                         ppt_columns_to_display = ppt_display_columns_mobile if IS_MOBILE else ppt_display_columns_desktop
 
                         edited_df_ppt = st.data_editor(st.session_state[snapshot_key_ppt], num_rows="dynamic", key=f"ppt_editor_{selected_product_object.id}", 
@@ -743,11 +738,18 @@ if authentication_status:
                                     if ppt_to_del: db_session_main_app.delete(ppt_to_del); st.toast(f"Deleted prod task ID: {ppt_id_del}", icon="➖")
                                 for index, row in edited_df_ppt.iterrows():
                                     ppt_id = int(row.get('ID')) if pd.notna(row.get('ID')) else None
-                                    task_name_val, emp_name_val, time_val, items_val = row.get("Task"), row.get("Employee"), row.get("Time (min)"), row.get("# Items in Task")
-                                    if emp_name_val is None and "Employee" not in edited_df_ppt.columns: 
+                                    task_name_val, time_val = row.get("Task"), row.get("Time (min)")
+                                    emp_name_val = row.get("Employee") 
+                                    items_val = row.get("# Items in Task") 
+
+                                    if emp_name_val is None and "Employee" not in ppt_columns_to_display: 
                                         st.error(f"Row {index+1} (Prod Tasks): Employee data is missing. Please edit on a wider screen or ensure data is complete."); continue
-                                    if items_val is None and "# Items in Task" not in edited_df_ppt.columns:
-                                        st.error(f"Row {index+1} (Prod Tasks): '# Items in Task' data is missing. Please edit on a wider screen or ensure data is complete."); continue
+                                    if items_val is None and "# Items in Task" not in ppt_columns_to_display:
+                                        # If # Items in Task was hidden, try to get original value or default
+                                        original_row = original_df_snapshot_ppt[original_df_snapshot_ppt["ID"] == ppt_id] if ppt_id else None
+                                        if original_row is not None and not original_row.empty: items_val = original_row["# Items in Task"].iloc[0]
+                                        else: items_val = 1 # Default if cannot find original
+                                    
                                     if not all([task_name_val, task_name_val != "No standard prod tasks defined", emp_name_val, emp_name_val != "No employees defined", pd.notna(time_val), pd.notna(items_val), int(items_val or 0) > 0]):
                                         if ppt_id is None and not any([task_name_val, emp_name_val, pd.notna(time_val), pd.notna(items_val)]): continue
                                         st.error(f"Row {index+1} (Prod Tasks): Invalid data. Skipping."); continue
@@ -765,9 +767,11 @@ if authentication_status:
                                             if changed: st.toast(f"Updated prod task ID: {ppt_id}", icon="🔄")
                                 new_rows_df_ppt = edited_df_ppt[edited_df_ppt['ID'].isna()]
                                 for index, row in new_rows_df_ppt.iterrows():
-                                    task_name_val, emp_name_val, time_val, items_val = row.get("Task"), row.get("Employee"), row.get("Time (min)"), row.get("# Items in Task")
-                                    if emp_name_val is None and "Employee" not in edited_df_ppt.columns: st.error(f"New Row (Prod Tasks): Employee data missing."); continue
-                                    if items_val is None and "# Items in Task" not in edited_df_ppt.columns: st.error(f"New Row (Prod Tasks): '# Items in Task' data missing."); continue
+                                    task_name_val, time_val = row.get("Task"), row.get("Time (min)")
+                                    emp_name_val = row.get("Employee")
+                                    items_val = row.get("# Items in Task")
+                                    if emp_name_val is None and "Employee" not in ppt_columns_to_display: st.error(f"New Row (Prod Tasks): Employee data missing."); continue
+                                    if items_val is None and "# Items in Task" not in ppt_columns_to_display: items_val = 1 # Default for new row if hidden
                                     if not all([task_name_val, task_name_val != "No standard prod tasks defined", emp_name_val, emp_name_val != "No employees defined", pd.notna(time_val), pd.notna(items_val), int(items_val or 0) > 0]):
                                         if not any([task_name_val, emp_name_val, pd.notna(time_val), pd.notna(items_val)]): continue
                                         st.error(f"New Row (Prod Tasks - approx original index {index+1}): Invalid data. Skipping."); continue
@@ -806,9 +810,14 @@ if authentication_status:
                                     pst_to_del = db_session_main_app.query(ProductShippingTask).filter(ProductShippingTask.id == pst_id_del, ProductShippingTask.product_id == selected_product_object.id).first()
                                     if pst_to_del: db_session_main_app.delete(pst_to_del); st.toast(f"Deleted ship task ID: {pst_id_del}", icon="➖")
                                 for index, row in edited_df_pst.iterrows():
-                                    pst_id = int(row.get('ID')) if pd.notna(row.get('ID')) else None; task_name_val, emp_name_val, time_val, items_val = row.get("Task"), row.get("Employee"), row.get("Time (min)"), row.get("# Items in Task")
-                                    if emp_name_val is None and "Employee" not in edited_df_pst.columns: st.error(f"Row {index+1} (Ship Tasks): Employee data missing."); continue
-                                    if items_val is None and "# Items in Task" not in edited_df_pst.columns: st.error(f"Row {index+1} (Ship Tasks): '# Items in Task' data missing."); continue
+                                    pst_id = int(row.get('ID')) if pd.notna(row.get('ID')) else None; task_name_val, time_val = row.get("Task"), row.get("Time (min)")
+                                    emp_name_val = row.get("Employee")
+                                    items_val = row.get("# Items in Task")
+                                    if emp_name_val is None and "Employee" not in pst_columns_to_display: st.error(f"Row {index+1} (Ship Tasks): Employee data missing."); continue
+                                    if items_val is None and "# Items in Task" not in pst_columns_to_display: 
+                                        original_row = original_df_snapshot_pst[original_df_snapshot_pst["ID"] == pst_id] if pst_id else None
+                                        if original_row is not None and not original_row.empty: items_val = original_row["# Items in Task"].iloc[0]
+                                        else: items_val = 1
                                     if not all([task_name_val, task_name_val != "No standard ship tasks defined", emp_name_val, emp_name_val != "No employees defined", pd.notna(time_val), pd.notna(items_val), int(items_val or 0) > 0]):
                                         if pst_id is None and not any([task_name_val, emp_name_val, pd.notna(time_val), pd.notna(items_val)]): continue
                                         st.error(f"Row {index+1} (Ship Tasks): Invalid data. Skipping."); continue
@@ -825,9 +834,11 @@ if authentication_status:
                                             if changed: st.toast(f"Updated ship task ID: {pst_id}", icon="🔄")
                                 new_rows_df_pst = edited_df_pst[edited_df_pst['ID'].isna()]
                                 for index, row in new_rows_df_pst.iterrows():
-                                    task_name_val, emp_name_val, time_val, items_val = row.get("Task"), row.get("Employee"), row.get("Time (min)"), row.get("# Items in Task")
-                                    if emp_name_val is None and "Employee" not in edited_df_pst.columns: st.error(f"New Row (Ship Tasks): Employee data missing."); continue
-                                    if items_val is None and "# Items in Task" not in edited_df_pst.columns: st.error(f"New Row (Ship Tasks): '# Items in Task' data missing."); continue
+                                    task_name_val, time_val = row.get("Task"), row.get("Time (min)")
+                                    emp_name_val = row.get("Employee")
+                                    items_val = row.get("# Items in Task")
+                                    if emp_name_val is None and "Employee" not in pst_columns_to_display: st.error(f"New Row (Ship Tasks): Employee data missing."); continue
+                                    if items_val is None and "# Items in Task" not in pst_columns_to_display: items_val = 1
                                     if not all([task_name_val, task_name_val != "No standard ship tasks defined", emp_name_val, emp_name_val != "No employees defined", pd.notna(time_val), pd.notna(items_val), int(items_val or 0) > 0]):
                                         if not any([task_name_val, emp_name_val, pd.notna(time_val), pd.notna(items_val)]): continue
                                         st.error(f"New Row (Ship Tasks - approx original index {index+1}): Invalid data. Skipping."); continue
@@ -935,21 +946,21 @@ if authentication_status:
                                 df_mat = pd.DataFrame(breakdown_data['material_details']); df_mat_display = df_mat.copy()
                                 df_mat_display["Qty (g)"] = df_mat_display["Qty (g)"].apply(lambda x: format_decimal_for_table(x, '0.001'))
                                 df_mat_display["Cost"] = df_mat_display["Cost"].apply(format_currency)
-                                st.dataframe(df_mat_display, hide_index=True, use_container_width=True) # CHANGED
+                                st.dataframe(df_mat_display, hide_index=True, use_container_width=True)
                             st.markdown(f"**Total Production Labor Cost/Item:** {format_currency(breakdown_data['total_production_labor_cost_per_item'])}")
                             if breakdown_data['prod_labor_details']:
                                 df_prod_labor = pd.DataFrame(breakdown_data['prod_labor_details']); df_prod_labor_display = df_prod_labor.copy()
                                 df_prod_labor_display["Time (min)"] = df_prod_labor_display["Time (min)"].apply(lambda x: format_decimal_for_table(x, '0.1'))
                                 df_prod_labor_display["Items in Task"] = df_prod_labor_display["Items in Task"].apply(lambda x: format_decimal_for_table(x, '0'))
                                 df_prod_labor_display["Cost"] = df_prod_labor_display["Cost"].apply(format_currency)
-                                st.dataframe(df_prod_labor_display, hide_index=True, use_container_width=True) # CHANGED
+                                st.dataframe(df_prod_labor_display, hide_index=True, use_container_width=True)
                             st.markdown(f"**Total Shipping Labor Cost/Item (Direct):** {format_currency(breakdown_data['total_shipping_labor_cost_per_item'])}")
                             if breakdown_data['ship_labor_details']:
                                 df_ship_labor = pd.DataFrame(breakdown_data['ship_labor_details']); df_ship_labor_display = df_ship_labor.copy()
                                 df_ship_labor_display["Time (min)"] = df_ship_labor_display["Time (min)"].apply(lambda x: format_decimal_for_table(x, '0.1'))
                                 df_ship_labor_display["Items in Task"] = df_ship_labor_display["Items in Task"].apply(lambda x: format_decimal_for_table(x, '0'))
                                 df_ship_labor_display["Cost"] = df_ship_labor_display["Cost"].apply(format_currency)
-                                st.dataframe(df_ship_labor_display, hide_index=True, use_container_width=True) # CHANGED
+                                st.dataframe(df_ship_labor_display, hide_index=True, use_container_width=True)
                             st.markdown(f"**Packaging - Label Cost/Item:** {format_currency(breakdown_data['packaging_label_cost_per_item'])}")
                             st.markdown(f"**Packaging - Material Cost/Item:** {format_currency(breakdown_data['packaging_material_cost_per_item'])}")
                             st.markdown(f"**Total Packaging Cost/Item:** {format_currency(breakdown_data['total_packaging_cost_per_item'])}")
@@ -1012,142 +1023,393 @@ if authentication_status:
 
         elif choice == "User Guide":
             st.markdown("## 📖 User Guide: Product Cost Calculator")
-            st.markdown("Welcome to the **Product Cost Calculator**! This guide will walk you through each section...")
+            st.markdown("""
+                Welcome to the **Product Cost Calculator**! This guide will walk you through each section of the application, 
+                helping you effectively manage your product costs and pricing strategies by understanding both *how to use the app* and the *key concepts* behind the calculations.
+            """)
+            st.markdown("---")
+
             with st.expander("🚀 Getting Started & Navigation", expanded=True):
                 st.markdown("### Logging In & Registration")
                 st.markdown("""
-                    - **Login:** If you have an existing account, enter your `Username` and `Password` in the main panel and click the **Login** button.
+                    - **Login:** If you have an existing account, enter your `Username` and `Password` in the main panel and click the **Login** button. User accounts ensure your data is kept private and is saved persistently.
                     - **Registration:** 
-                        - If you are a new user, click on the **Register** tab/link.
-                        - Fill in your `Name`, `Username`, `Email`, and `Password` (enter it twice for confirmation).
+                        - If you are a new user, click on the **Register** tab/link within the login area.
+                        - Fill in your `Name` (how you'd like to be greeted), `Username` (your unique login ID), `Email`, and `Password` (enter it twice for confirmation).
                         - Click the **Register** button.
-                    - Upon successful login or registration, you'll see a welcome message and the main menu will appear in the sidebar.
+                    - Upon successful login or registration, you'll see a welcome message in the sidebar, and the main menu will become active.
                 """)
                 st.markdown("### Navigating the App")
                 st.markdown("""
                     - The main navigation is done via the **sidebar menu** on the left, under "🛠️ Main Menu".
-                    - Click on any menu item (e.g., "Manage Ingredients", "Manage Products") to navigate to that section.
-                    - Your current selection is highlighted in the sidebar.
+                    - Click on any menu item (e.g., "Manage Ingredients", "Manage Products") to navigate to that section. The main panel will update accordingly.
+                    - Your current selection in the menu is highlighted.
+                    - To log out, click the "Logout" button in the sidebar.
                 """)
             st.markdown("---")
+
             with st.expander("🗃️ Core Data Management Sections", expanded=False):
                 st.markdown("### Manage Ingredients")
                 st.markdown("""
-                    *Purpose: Track your raw materials, their costs, and suppliers. This data is fundamental for calculating material costs per product.*
+                    *Purpose: This section is for tracking all your raw materials, their purchase costs, and suppliers. This data is the absolute foundation for calculating the material costs that go into each of your products.*
+                    *Concept: Ingredients are the direct physical components of your products. To accurately determine how much it costs to make a product, you first need to know the precise cost of each ingredient per standardized unit (e.g., cost per gram or per kilogram).*
                     
                     **How to Use:**
-                    - The table displays your current ingredients.
-                    - **To Add a New Ingredient:**
-                        1. Click the `+ Add row` button at the bottom of the data editor.
-                        2. Fill in the details in the new row.
-                    - **To Edit an Existing Ingredient:** Click directly into any cell and modify its value.
-                    - **To Delete an Ingredient:** Click the trash can icon (`🗑️`) next to the row you wish to remove.
-                    - **Important:** After making any additions, edits, or deletions, you **MUST** click the **"Save Ingredient Changes"** button to persist your modifications to the database.
+                    - The table displays your current list of ingredients.
+                    - **To Add a New Ingredient:** Click the `+ Add row` button at the bottom of the data editor. A new, empty row will appear for you to fill in.
+                    - **To Edit an Existing Ingredient:** Simply click directly into any cell of an existing ingredient's row and modify its value.
+                    - **To Delete an Ingredient:** Click the trash can icon (`🗑️`) located at the end of the row you wish to remove. The row will be removed from the editor.
+                    - **Important:** After making any additions, edits, or deletions in the table, you **MUST** click the **"Save Ingredient Changes"** button located below the table to make your modifications permanent in the database. If you navigate away without saving, your changes will be lost.
                     
-                    **Key Fields:**
-                    - `Ingredient Name*`: The descriptive name of the raw material (e.g., "Organic Cocoa Butter"). *This field is required.*
-                    - `Provider (Optional)`: The supplier or source of the ingredient (e.g., "Supplier X").
-                    - `Price per Unit (€)*`: The cost for the quantity specified in `Unit (kg)` (e.g., if the price is €10 for a 5kg bag, enter `10.00`). *This field is required.*
-                    - `Unit Quantity (kg)*`: The amount in kilograms that the `Price per Unit` refers to (e.g., for a 5kg bag, enter `5.000`). *This field is required.*
-                    - `Price URL (Optional)`: A web link to where you source the ingredient, for your reference. Use the Link icon to validate/open.
+                    **Key Fields & Concepts:**
+                    - `Ingredient Name*`: A clear, descriptive name for the raw material (e.g., "Organic Cocoa Butter," "French Sea Salt"). *This field is required.*
+                    - `Provider (Optional)`: The name of the supplier or source from whom you purchase this ingredient (e.g., "Supplier X," "Local Farm Co."). This is for your reference and can help in tracking or reordering.
+                    - `Price per Unit (€)*`: This is the price you pay for a specific quantity of the ingredient as you purchase it. For example, if you buy a 5kg bag of flour for €10, you would enter `10.00` here. *This field is required.*
+                    - `Unit Quantity (kg)*`: This field specifies the quantity, **in kilograms**, that the `Price per Unit (€)` refers to. This is crucial for standardizing costs.
+                        - *Example 1 (Buying in kg):* If you buy a 5kg bag of flour for €10, enter `5.000` here.
+                        - *Example 2 (Buying in grams):* If you buy a 250g jar of spice for €3, you would enter `0.250` here (since 250g = 0.250kg).
+                        - *Why this is important:* The application uses these two fields (`Price per Unit` and `Unit Quantity (kg)`) to calculate a standardized cost per kilogram: `Cost per kg = Price per Unit (€) / Unit Quantity (kg)`. This standardized cost is then used when you specify ingredient quantities in grams for your product recipes. *This field is required.*
+                    - `Price URL (Optional)`: A web link to the ingredient's product page from your supplier, or any other relevant online resource. This is for your reference. You can click the link icon to validate or open the URL.
+                    
+                    *Significance: The data entered here, particularly the calculated cost per gram/kg, directly feeds into the "Total Material Cost/Item" when you define your product recipes in the "Manage Products" section. Accurate ingredient costing is fundamental to accurate final product costing.*
                 """)
                 st.markdown("---")
+
                 st.markdown("### Manage Employees")
                 st.markdown("""
-                    *Purpose: Track your employees, particularly those whose labor contributes directly to product costs (if paid hourly) or whose salaries are allocated as overheads.*
+                    *Purpose: This section allows you to list your employees and define their labor rates or note if they are salaried. This information is used to calculate direct labor costs for tasks and for allocating salary overheads.*
+                    *Concept: Labor is a significant cost component. It's important to differentiate between:
+                        1.  **Direct Labor:** Work directly attributable to producing a specific product (e.g., time spent mixing, assembling, packing an item). This is typically costed using an hourly rate.
+                        2.  **Indirect Labor/Salaried Staff:** Work that supports the business overall but isn't tied to producing a single item (e.g., administrative staff, marketing, management). These are often covered by fixed salaries and treated as overheads.*
                     
-                    **How to Use:** Similar to "Manage Ingredients" -- use the data editor to add, edit, or delete employee records. Always click **"Save Employee Changes"**.
+                    **How to Use:**
+                    - Use the data editor to add, edit, or delete employee records.
+                    - Always click **"Save Employee Changes"** to persist your modifications.
                     
-                    **Key Fields:**
-                    - `Employee Name*`: Full name of the employee. *Required.*
-                    - `Hourly Rate (€)*`: The labor cost of this employee per hour. This is crucial for employees involved in timed production or shipping tasks. For salaried employees whose cost is allocated via the "Global Salaries" section, this can be `0.00` if their cost is *only* covered by the global salary allocation. *Required.*
-                    - `Role (Optional)`: The employee's job title or primary role (e.g., "Production Staff", "Packer", "Admin").
+                    **Key Fields & Concepts:**
+                    - `Employee Name*`: The full name of the employee. *Required.*
+                    - `Hourly Rate (€)*`: The labor cost of this employee per hour. 
+                        - This rate is crucial for employees whose time is tracked for specific production or shipping tasks (defined in "Manage Products").
+                        - For employees who are on a fixed salary and whose cost will be allocated as an overhead via the "Global Costs/Salaries" section, you can enter `0.00` here if their direct task time is not separately costed. However, if a salaried employee also performs direct, trackable tasks, you might still enter an effective hourly rate. *Required.*
+                    - `Role (Optional)`: The employee's job title or primary role (e.g., "Production Manager," "Artisan Baker," "Shipping Clerk"). This is for descriptive purposes.
+                    
+                    *Significance: The `Hourly Rate (€)` is directly used in the "Manage Products" section when you assign an employee to a timed production or shipping task, contributing to the "Direct Labor Costs" in the Product Cost Breakdown. The list of employees is also used in "Global Costs/Salaries" if you assign fixed monthly salaries, and in "Manage Products" for allocating those global salaries.*
                 """)
                 st.markdown("---")
-                st.markdown("### Manage Standard Production Tasks")
+
+                st.markdown("### Manage Standard Production Tasks & Manage Standard Shipping Tasks")
                 st.markdown("""
-                    *Purpose: Define a reusable list of common tasks involved in producing your products (e.g., "Mixing Ingredients", "Molding", "Quality Check", "Machine Setup").*
-                    **How to Use:** Add, edit, or delete task names. Click **"Save Production Task Changes"**.
-                    **Key Fields:** - `Task Name*`: A clear, descriptive name for the production task. *Required.*
+                    *Purpose: These two sections allow you to define reusable lists of common tasks performed during the production and shipping phases, respectively.*
+                    *Concept: By standardizing task names (e.g., "Weighing Ingredients," "Machine Setup," "Quality Control," "Box Assembly," "Label Printing"), you create a consistent vocabulary for your operations. This simplifies the process of assigning labor activities to specific products and ensures that similar activities are costed uniformly.*
+                    
+                    **How to Use (applies to both Production and Shipping Task sections):**
+                    - The table shows the list of currently defined standard tasks.
+                    - **To Add a New Task:** Click `+ Add row`, type the task name in the new row.
+                    - **To Edit an Existing Task:** Click into the cell and change the name.
+                    - **To Delete a Task:** Click the trash can icon (`🗑️`) for that row.
+                    - Click the respective **"Save Production Task Changes"** or **"Save Shipping Task Changes"** button to save.
+                    
+                    **Key Fields & Concepts:**
+                    - `Task Name*`: A clear, concise, and descriptive name for the task (e.g., "Mixing Dough Batch A," "Final Product Inspection," "Packing Single Item Order"). *Required.*
+                    
+                    *Significance: The tasks you define here will appear as selectable options when you are detailing the specific labor steps for each product in the "Manage Products -> Product Production Tasks" and "Manage Products -> Product Shipping Tasks" sub-sections. This ensures consistency and saves you from retyping task descriptions for every product.*
                 """)
                 st.markdown("---")
-                st.markdown("### Manage Standard Shipping Tasks")
-                st.markdown("""
-                    *Purpose: Define a reusable list of common tasks involved in preparing and shipping your products (e.g., "Order Picking", "Box Assembly", "Label Printing", "Post Office Run").*
-                    **How to Use:** Add, edit, or delete task names. Click **"Save Shipping Task Changes"**.
-                    **Key Fields:** - `Task Name*`: A clear, descriptive name for the shipping task. *Required.*
-                """)
-                st.markdown("---")
+
                 st.markdown("### 🌍 Global Costs/Salaries")
                 st.markdown("""
-                    *Purpose: Define business-wide fixed costs (like rent) and fixed monthly salaries for employees. These are then used for overhead allocation to individual products.*
+                    *Purpose: This section is for defining business-wide fixed operational costs (like rent and utilities) and fixed monthly salaries for employees whose work generally supports the entire business rather than a single product line directly.*
+                    *Concept: These are often referred to as **overheads** or **indirect costs**. While not directly traceable to a single unit produced (like an ingredient is), these costs are essential for the business to function and must ultimately be covered by the revenue generated from selling products. This app allows you to allocate a portion of these global costs to your individual products to get a truer picture of their total cost.*
+                    
                     **Monthly Fixed Overheads (Expander):**
-                    - `Global Monthly Rent (€)`: Your total monthly rent expense for your business premises.
-                    - `Global Monthly Utilities (€)`: Your total monthly utilities (e.g., electricity, water, internet).
-                    - Click **"Save Global Overheads"** after entering/updating these values.
+                    - `Global Monthly Rent (€)`: Enter your total monthly rent expense for your business premises (workshop, office, studio, etc.).
+                    - `Global Monthly Utilities (€)`: Enter your total estimated monthly cost for essential utilities like electricity, water, heating/cooling, and business internet.
+                    - After entering or updating these values, click the **"Save Global Overheads"** button.
+                    
                     **Global Monthly Salaries (Table):**
-                    - *Purpose:* For employees who receive a fixed monthly salary.
-                    - **How to Use:** Select an employee, enter their `Monthly Salary (€)*`. Add, edit, or delete. *Note:* An employee can only have one global salary entry.
-                    - Click **"Save Global Salaries"** to persist changes.
+                    - *Purpose:* This is for employees who receive a fixed monthly salary that is not directly tied to the number of hours they spend on a specific product (e.g., administrative staff, marketing personnel, a manager, or yourself if you draw a fixed salary). This is different from employees whose labor is costed based on an hourly rate for specific tasks.
+                    - **How to Use:**
+                        1.  In the `Employee Name*` column, select an employee from the dropdown. Employees must first be defined in the "Manage Employees" section to appear here.
+                        2.  In the `Monthly Salary (€)*` column, enter their total gross monthly salary.
+                        3.  You can add new salary entries, edit existing ones, or delete them using the data editor.
+                        4.  *Important Note:* An employee can typically only have one global salary entry. The system will try to prevent assigning multiple global salaries to the same employee.
+                    - Click the **"Save Global Salaries"** button to persist your changes.
+                    
+                    *Significance: The costs defined here (Rent, Utilities, Global Salaries) become available for allocation to your individual products. You will specify *how much* of these global costs each product line should bear in the "Manage Products -> Other Product Specific Costs & Pricing" section (using the "Items of THIS Product per Month" fields for allocation). This allocation contributes to the "Allocated Overheads per Item" in the Product Cost Breakdown, providing a more complete view of what it truly costs to bring each product to market.*
                 """)
             st.markdown("---")
+
             with st.expander("📦 Manage Products (The Core Engine!)", expanded=False):
+                st.markdown("""
+                *Purpose: This is the central hub for defining each of your sellable products and all their associated cost components. The data entered here directly drives the calculations in the "Product Cost Breakdown" analysis.*
+                *Concept: Each product has its own unique recipe (materials), labor requirements (production and shipping tasks), packaging, and potentially a unique way it absorbs business overheads and incurs selling channel fees. This section allows you to detail all these aspects.*
+                """)
+
                 st.markdown("### Adding/Editing Basic Product Attributes (Top Table)")
                 st.markdown("""
-                    - Add, edit, or delete products.
-                    - **Key Fields:** `Product Name*`, `Batch Size (items)*`, `Monthly Prod (items)*`.
-                    - Click **"Save Product Attribute Changes"**.
+                    *This table provides an overview of all your products and allows you to manage their high-level attributes.*
+                    **How to Use:**
+                    - Add new products, edit existing ones, or delete them using the data editor functionalities.
+                    - Click **"Save Product Attribute Changes"** to save.
+                    
+                    **Key Fields & Concepts:**
+                    - `Product Name*`: The unique, customer-facing name of your product (e.g., "Artisan Sourdough Loaf," "Hand-poured Soy Candle - Lavender"). *Required.*
+                    - `Batch Size (items)*`: The typical number of finished items you produce in one single manufacturing run or batch for this specific product. 
+                        - *Example:* If you bake 12 loaves of sourdough at a time, the batch size is 12.
+                        - *Significance:* While not directly used in every per-item cost calculation in *this specific app's current breakdown logic* (which focuses on per-item inputs for tasks), knowing your batch size is crucial for operational planning and can help you mentally verify if your per-item task times are realistic (e.g., time to mix dough for a batch of 12 vs. for one loaf). *Required.*
+                    - `Monthly Prod (items)*`: Your estimated total number of units of this specific product that you typically produce (or plan to produce/sell) in a month.
+                        - *Significance:* This figure is primarily used in this application as the **denominator** when you allocate a portion of "Global Costs" (like rent/utilities or a global salary defined in "Global Costs/Salaries") to this product. For example, if your monthly rent is €500 and you state this product has a monthly production of 1000 units and is set to absorb that rent, the app might calculate €0.50 of rent cost per item for this product based on this volume. You define this allocation link in the "Other Product Specific Costs & Pricing" sub-section. *Required.*
+                    
+                    *Tip: When you add a new product and save, it's often automatically selected in the dropdown below for immediate detailed editing.*
                 """)
                 st.markdown("---")
+
                 st.markdown("### Managing Detailed Product Components (Lower Section)")
-                st.markdown("Select a product from the dropdown. Expanders below apply to it.")
+                st.markdown("""
+                    - Once you have products listed in the table above, **select a product from the `Select Product to Manage Details:` dropdown**. 
+                    - All the expanders that appear below this dropdown (`Product Materials`, `Product Production Tasks`, etc.) will then apply **only to the currently selected product**. You must save changes within each expander for that specific product.
+                """)
                 st.markdown("---")
+
                 st.markdown("#### 🧪 Product Materials (for the selected product)")
                 st.markdown("""
-                    *Purpose: Define ingredients for **one unit** of the product.*
-                    **How to Use:** Select `Ingredient (Provider)*`, enter `Quantity (grams)*`. Click **"Save Materials for [Product Name]"**.
+                    *Purpose: Define the precise recipe or bill of materials for **one single unit** of the currently selected product.*
+                    *Concept: This is where you list every raw ingredient (from your "Manage Ingredients" list) and the exact quantity of that ingredient required to make one finished item of this product.*
+                    
+                    **How to Use:**
+                    - For each ingredient that goes into one unit of the selected product:
+                        1.  In the `Ingredient (Provider)*` column, select the correct ingredient from the dropdown list (this list is populated from your "Manage Ingredients" section).
+                        2.  In the `Quantity (grams)*` column, enter the amount of that specific ingredient, **in grams**, needed to produce **one single item** of the currently selected product. (e.g., if one chocolate bar uses 70 grams of cocoa, enter `70.000`).
+                    - Add as many ingredient rows as needed to complete the recipe for one item.
+                    - After defining all materials for the selected product, click the **"Save Materials for [Product Name]"** button.
+                    
+                    *Significance: The quantities and costs of these materials directly determine the "Total Material Cost/Item" for this product in the Cost Breakdown. Accuracy here is paramount.*
                 """)
                 st.markdown("---")
+
                 st.markdown("#### 🛠️ Product Production Tasks (for the selected product)")
                 st.markdown("""
-                    *Purpose: Assign tasks and employees for direct production labor costs.*
-                    **How to Use:** Select `Task*`, `Performed By*`, enter `Time (min)*` and `# Items in Task*` (items processed in that time). Click **"Save Production Tasks for [Product Name]"**.
+                    *Purpose: Assign specific production labor activities, the employees who perform them, and the time taken, to calculate the direct production labor costs for one unit of the selected product.*
+                    *Concept: This breaks down the manufacturing process into discrete, timed tasks. The cost of each task is then attributed to the items produced during that task.*
+                    
+                    **How to Use:** For each distinct step in the production process of the selected product:
+                    - `Task*`: Select a standard production task from the dropdown (these are tasks you defined in "Manage Standard Production Tasks").
+                    - `Performed By*`: Select the employee (from "Manage Employees") who performs this task. The system will use their defined `Hourly Rate (€)` for cost calculation.
+                    - `Time (min)*`: Enter the total time in minutes it takes this employee to perform this specific task for a certain number of items.
+                    - `# Items in Task*`: This is a **critically important field**. Enter the number of product items that are fully processed or completed by the employee for *this specific task* during the `Time (min)` you just entered.
+                        - *Example:* If an employee spends 60 minutes mixing ingredients for a batch that ultimately yields 100 finished product items, you would enter `60` for Time (min) and `100` for # Items in Task. The labor cost for that 60 minutes will then be distributed across those 100 items for this task.
+                        - *Another Example:* If an employee spends 10 minutes hand-finishing 5 items, enter Time=10, Items=5.
+                    - Add rows for all production tasks involved in making one unit of the product.
+                    - Click the **"Save Production Tasks for [Product Name]"** button.
+                    
+                    *Significance: The data entered here is used to calculate the "Total Production Labor Cost/Item" in the Cost Breakdown. The formula for each task's per-item cost is essentially: `((Time (min) / 60) * Employee Hourly Rate) / # Items in Task`.*
                 """)
                 st.markdown("---")
+
                 st.markdown("#### 🚚 Product Shipping Tasks (for the selected product)")
                 st.markdown("""
-                    *Purpose: Direct labor for shipping.*
-                    **How to Use:** Similar to Production Tasks. Click **"Save Shipping Tasks for [Product Name]"**.
+                    *Purpose: Similar to Production Tasks, this section is for assigning direct labor involved in preparing and shipping one or more items of the selected product.*
+                    *Concept: This captures labor costs for activities like picking items from storage, assembling shipping boxes, packing items, printing labels, and preparing for dispatch, specifically for this product.*
+                    
+                    **How to Use:** For each distinct step in your shipping process for the selected product:
+                    - `Task*`: Select a standard shipping task (defined in "Manage Standard Shipping Tasks").
+                    - `Performed By*`: Select the employee.
+                    - `Time (min)*`: Time spent by the employee on this shipping task.
+                    - `# Items in Task*`: The number of units of *this specific product* that are processed for shipping by the employee during the entered `Time (min)`.
+                        - *Example:* If an employee spends 30 minutes packing 5 orders, and each of those orders contains, on average, 1 unit of *this specific product*, you might enter `30` for Time (min) and `5` for # Items in Task if you want to allocate that packing time across those 5 units of this product. If an order typically contains 2 units of this product, and they pack 5 such orders (10 units total) in 30 mins, you'd enter Time=30, Items=10.
+                    - Click the **"Save Shipping Tasks for [Product Name]"** button.
+                    
+                    *Significance: This data contributes to the "Total Shipping Labor Cost/Item (Direct)" in the Cost Breakdown.*
                 """)
                 st.markdown("---")
+
                 st.markdown("#### 🪙 Other Product Specific Costs & Pricing (for the selected product)")
                 st.markdown("""
-                    **Packaging Costs (per Item):** `Label Cost/Item (€)`, `Other Pkg Materials Cost/Item (€)`.
-                    **Salary & Overhead Allocation:** Allocate a global salary or rent/utilities to this product based on `Items of THIS Product per Month`.
-                    **Online Selling Fees - Retail/Wholesale:** Enter average order values, percentage fees, and flat fees.
-                    **Pricing Strategy:** Set `Wholesale Price/Item (€)`, `Retail Price/Item (€)`, and a `Buffer Percentage`.
-                    **Distribution Mix:** Set `Wholesale Distribution (%)`.
-                    Click **"Save Other Costs & Pricing for [Product Name]"**.
+                    *Purpose: This crucial expander allows you to define various other costs directly associated with this product, allocate shared business overheads to it, and set its pricing and sales channel parameters.*
+                    *Concept: Beyond raw materials and direct labor, products incur other costs (packaging, share of rent) and have specific selling characteristics (channel fees, pricing). This section captures these diverse elements.*
+                    
+                    **Packaging Costs (per Item):** These are direct, per-item costs for packaging materials.
+                    - `Label Cost/Item (€)`: The cost of labels specifically used for one unit of this product.
+                    - `Other Pkg Materials Cost/Item (€)`: The cost of boxes, fillings, tape, protective wrap, etc., used for one unit of this product.
+
+                    **Salary & Overhead Allocation:** This is where you link the global costs (defined in "Global Costs/Salaries") to this specific product.
+                    - `Allocate Salary of Employee`: From the dropdown, choose an employee (who **must** have a "Global Salary" defined in "Global Costs/Salaries") if you want to attribute a portion of their fixed monthly salary as an overhead cost to this product line. Select "None" if no specific global salary is directly allocated this way to this product.
+                    - `Items of THIS Product per Month (for salary allocation)`: If you selected an employee above, enter the total number of units of *this specific product* that you estimate are produced/sold monthly and should therefore bear a portion of that selected employee's global salary. 
+                        - *Calculation:* The system will calculate the allocated salary cost per item as: `(Selected Employee's Global Monthly Salary) / (Value entered here for "Items of THIS Product per Month")`.
+                    - `Items of THIS Product per Month (for rent/util allocation)`: Similarly, enter the total number of units of *this specific product* produced/sold monthly that should absorb a share of your total global rent and utilities (defined in "Global Costs/Salaries").
+                        - *Calculation:* The system calculates: `(Total Global Monthly Rent + Total Global Monthly Utilities) / (Value entered here for "Items of THIS Product per Month")` to get the per-item allocated rent/utilities cost.
+
+                    **Online Selling Fees - Retail Channel:** Costs associated with selling through your direct-to-consumer channels (e.g., your website, Etsy, market stall).
+                    - `Avg Retail Order Value (€)`: The average total monetary value of a typical customer's order when they buy through your retail channel. This is used to determine the average number of items per retail order (`Avg Retail Order Value / Retail Price per Item`), which then helps to distribute any per-order shipping costs or flat fees across the items in that average order.
+                    - `Retail Credit Card Fee (%)`: The percentage fee charged by your payment processor (e.g., Stripe, PayPal) for retail sales. Enter as a decimal (e.g., `0.029` for 2.9%).
+                    - `Retail Platform Fee (%)`: Any percentage-based commission or fee charged by your retail sales platform (e.g., Etsy's commission, Shopify's transaction fee if applicable). Enter as a decimal.
+                    - `Retail Avg Shipping Paid by You (€)`: The average amount *you* (the seller) actually pay to the shipping carrier for a typical retail order. This is your cost, not necessarily what you charge the customer for shipping.
+
+                    **Online Selling Fees - Wholesale Channel:** Costs associated with selling to other businesses.
+                    - `Avg Wholesale Order Value (€)`: The average total monetary value of a typical wholesale order. Used similarly to the retail AOV for distributing per-order fees.
+                    - `Wholesale Commission (%)`: Any percentage-based commission paid to wholesale platforms, sales agents, or distributors. Enter as a decimal.
+                    - `Wholesale Payment Processing Fee (%)`: Payment processing fees specifically for wholesale transactions (may differ from retail). Enter as a decimal.
+                    - `Wholesale Flat Fee per Order (€)`: Any fixed fee you incur per wholesale order (e.g., a platform's listing fee per order, or a fixed handling charge).
+
+                    **Pricing Strategy:** Define your selling prices and desired profit buffer.
+                    - `Wholesale Price/Item (€)`: The price at which you sell **one unit** of this product to your wholesale customers.
+                    - `Retail Price/Item (€)`: The price at which you sell **one unit** of this product to your direct retail customers.
+                    - `Buffer Percentage`: A safety margin you want to add to your calculated `Total Production Cost/Item`. Enter as a decimal (e.g., `0.10` for 10%, `0.25` for 25%). 
+                        - *Concept:* This buffer helps ensure profitability by covering unforeseen minor cost fluctuations, contributing to general business profit, or simply building in a desired markup. The "Target Price (with Buffer)" in the breakdown is `Total Production Cost/Item * (1 + Buffer Percentage)`.
+
+                    **Distribution Mix:** Estimate your sales channel split for this product.
+                    - `Wholesale Distribution (%)`: Estimate the percentage of your total sales volume for *this specific product* that you anticipate will be through the wholesale channel (e.g., enter `0.60` for 60%).
+                    - `Retail Distribution (%)` will be automatically calculated and displayed as (100% - Wholesale Distribution %).
+                    - *Significance:* These percentages are crucial for calculating the "Blended Average" profit and margin metrics in the "Product Cost Breakdown" section, giving an overall view of the product's profitability considering your sales strategy.
+
+                    **Remember to click the "Save Other Costs & Pricing for [Product Name]"** button after making any changes in this detailed section to ensure they are saved for the selected product.
                 """)
             st.markdown("---")
-            with st.expander("📈 Product Cost Breakdown Analysis", expanded=False):
+
+            with st.expander("📈 Product Cost Breakdown Analysis", expanded=True): # Default this to expanded as it's key
                 st.markdown("### Interpreting the Breakdown Section")
                 st.markdown("""
-                    Select a product to see its full cost analysis.
-                    **Key Metrics:** `Total Production Cost/Item`, `Target Price (with Buffer)`, `Blended Avg Profit/Item`.
-                    **Details:** Direct COGS (Materials, Labor, Packaging), Allocated Overheads.
-                    **Channel Performance:** Compares Retail vs. Wholesale profitability (fees, total costs, profit, margin).
-                    **Blended Performance:** Overall metrics weighted by your distribution mix.
+                    *Purpose: This section is the heart of the calculator, providing a comprehensive financial analysis for any product you select. It synthesizes all the data you've meticulously entered in other sections (Ingredients, Employees, Tasks, Global Costs, and specific Product details) to give you a clear picture of your costs, profitability, and pricing viability.*
+                    
+                    **How to Use:**
+                    1. Navigate to the "Product Cost Breakdown" section from the sidebar menu.
+                    2. Select a product from the `Select Product for Breakdown:` dropdown.
+                    3. The analysis for the selected product will update automatically, showing various cost components and profitability metrics.
+                    
+                    **Understanding Key Metrics & Sections:**
+
+                    #### **A. Summary Metrics (Displayed at the Top):**
+                    These three headline figures give you an immediate overview of the selected product's financial health.
+
+                    - **`Total Production Cost/Item`**:
+                        - **Concept:** This is the **fully loaded cost** to produce one single unit of the selected product. It represents every expense incurred to get one item ready for sale, *before* considering any costs associated with the specific selling channel (like marketplace fees or specific shipping arrangements with customers).
+                        - **Components:** It's the sum of:
+                            1.  Direct Material Costs (all ingredients)
+                            2.  Direct Labor Costs (both production tasks and direct shipping preparation tasks)
+                            3.  Direct Packaging Costs (labels, boxes, etc.)
+                            4.  Allocated Overheads (your product's share of fixed business costs like rent, utilities, and specified global salaries).
+                        - **Significance:** This is your baseline cost. You must sell above this price to even begin making a profit on the item itself.
+
+                    - **`Target Price (with Buffer)`**:
+                        - **Concept:** This is a suggested selling price that not only covers your `Total Production Cost/Item` but also includes a "buffer" or safety margin. This buffer can account for:
+                            - Unforeseen cost increases.
+                            - Minor variations in material usage or labor time.
+                            - A desired minimum profit contribution from the item.
+                            - Contribution to business growth and reinvestment.
+                        - **Calculation:** `Total Production Cost/Item * (1 + Buffer Percentage you set for this product)`.
+                            - *Example:* If Total Production Cost is €5.00 and your Buffer is 20% (0.20), the Target Price is €5.00 * 1.20 = €6.00.
+                        - **Significance:** Use this as a guide when setting your actual retail and wholesale prices. Selling below this consistently means you're eating into your safety margin or desired profit.
+
+                    - **`Blended Avg Profit/Item`**:
+                        - **Concept:** "Blended" means it's an average profit calculated across your different selling channels (Retail and Wholesale), weighted by how much you sell through each.
+                        - **Calculation:** It considers the profit per item from your Retail channel and the profit per item from your Wholesale channel, then averages them based on the "Distribution %" you set for this product (in "Manage Products -> Other Costs & Pricing").
+                            - *Formula Idea:* `(Retail Profit/Item * Retail Distribution %) + (Wholesale Profit/Item * Wholesale Distribution %)`
+                        - **Significance:** This is a powerful indicator of the overall average profitability of this product, considering your entire sales strategy. A low or negative blended profit signals potential issues even if one channel appears profitable.
+
+                    ---
+                    #### **B. Detailed Breakdown Expanders:**
+
+                    - **💰 Direct COGS (Cost of Goods Sold) Details:**
+                        - **Concept:** COGS represents costs that are *directly* attributable to producing the goods you sell. These costs typically vary with the number of items you produce (i.e., they are largely variable costs).
+                        - **`Total Material Cost/Item`**:
+                            - **Concept:** The sum of the costs of all raw physical ingredients that go into making one unit of your product.
+                            - **Calculation (for each ingredient):** `(Quantity of Ingredient Used in Grams / 1000 grams/kg) * (Price per Unit of Ingredient / Unit Quantity in kg of Ingredient)`.
+                                - *Example:* If you use 50g of cocoa (€20 for a 1kg bag): `(50g / 1000) * (€20 / 1kg) = 0.05kg * €20/kg = €1.00`.
+                            - A table below this summary shows the cost contribution of each individual ingredient.
+                        - **`Total Production Labor Cost/Item`**:
+                            - **Concept:** The cost of labor directly involved in the manufacturing or assembly process of one unit of the product.
+                            - **Calculation (for each production task):** `((Time Spent in Minutes / 60 minutes/hour) * Employee's Hourly Rate) / Number of Items Processed in that Task`.
+                                - The "Number of Items Processed in that Task" is crucial. If an employee spends 1 hour (€15/hr) mixing a batch that yields 100 items, the labor cost per item for that task is `(1 * €15) / 100 = €0.15`.
+                            - A table details the cost of each production task assigned to the product.
+                        - **`Total Shipping Labor Cost/Item (Direct)`**:
+                            - **Concept:** The cost of labor directly associated with preparing one unit of the product for shipment (e.g., picking the item, final individual packaging, labeling for dispatch). This is distinct from general warehouse labor (which might be an overhead) or carrier fees.
+                            - **Calculation:** Same principle as Production Labor Cost.
+                            - A table details the cost of each direct shipping task.
+                        - **`Packaging - Label Cost/Item` & `Packaging - Material Cost/Item`**:
+                            - **Concept:** The per-item cost of all packaging materials (labels, boxes, void fill, tape, etc.) that are directly used for one unit of the product.
+                            - These are taken directly from your inputs in "Manage Products -> Other Costs & Pricing".
+                        - **`Total Packaging Cost/Item`**: The sum of label and other material packaging costs.
+                        - **`Subtotal Direct COGS/Item`**: The sum of all the above direct costs (Materials + Production Labor + Shipping Labor + Packaging). This is a critical metric representing variable costs directly tied to producing each item.
+
+                    - **🏢 Allocated Overheads per Item:**
+                        - **Concept:** Overheads (also known as indirect costs or fixed costs, though some can be semi-variable) are business expenses that are not directly tied to producing a single unit but are necessary for the business to operate (e.g., rent, utilities, administrative salaries). This section shows how a portion of these global costs is "allocated" or assigned to each unit of this product.
+                        - **`Allocated Salary Cost/Item`**:
+                            - **Concept:** The share of a specific globally-salaried employee's monthly earnings that is attributed to one unit of this product.
+                            - **Calculation:** `(Selected Employee's Global Monthly Salary) / (Your input for "Items of THIS Product per Month for salary allocation")`.
+                            - The "Items of THIS Product per Month for salary allocation" (entered in "Manage Products -> Other Costs & Pricing") is your estimate of how many units of *this specific product* should bear the cost of that salary.
+                        - **`Allocated Rent/Utilities Cost/Item`**:
+                            - **Concept:** The share of your business's total monthly rent and utilities that is attributed to one unit of this product.
+                            - **Calculation:** `(Global Monthly Rent + Global Monthly Utilities) / (Your input for "Items of THIS Product per Month for rent/utilities allocation")`.
+                            - Similar to salary, the denominator is your estimate for *this specific product*.
+                        - **`Subtotal Allocated Overheads/Item`**: The sum of these per-item allocated fixed costs.
+
+                    ---
+                    #### **C. Channel Performance Analysis (per Item - Retail vs. Wholesale):**
+                    This vital section breaks down the profitability of selling your product through your different defined channels. It helps you understand where you make more money and what drives the costs in each channel.
+
+                    For each channel (Retail and Wholesale), the following are calculated:
+                    - **`Price`**: Your selling price for one item in that channel (as set in "Manage Products -> Other Costs & Pricing").
+                    - **Channel-Specific Fees (e.g., CC Fee, Platform Fee, Commission)**:
+                        - **Concept:** These are costs directly incurred when you make a sale through that specific channel.
+                        - **Calculation:**
+                            - *Percentage Fees:* `Selling Price for the channel * Fee Percentage` (e.g., `Retail Price * Retail CC Fee %`).
+                            - *Flat Fees per Order (Wholesale):* These are distributed per item: `Wholesale Flat Fee per Order / Average Items per Wholesale Order`. The "Average Items per Wholesale Order" is derived from your "Avg Wholesale Order Value" and "Wholesale Price/Item" inputs.
+                    - **`Shipping Paid by You (per item)`**:
+                        - **Concept (Retail):** The average cost *you* pay to the shipping carrier for a typical retail order, divided by the average number of items in that retail order. This gives a per-item shipping cost burden on you.
+                            - *Calculation:* `Retail Avg Shipping Paid by You / (Retail Avg Order Value / Retail Price/Item)`. If `Retail Avg Order Value` or `Retail Price/Item` is zero, this calculation might result in an error or zero, so ensure those fields are appropriately filled.
+                        - **Concept (Wholesale):** Direct *labor* for shipping is already included in COGS. This line item here primarily reflects the retail context. For wholesale, specific carrier fees you pay per item (if not included in the wholesale price or paid by the buyer) would need to be factored into your overall wholesale pricing strategy or considered as part of the "Wholesale Commission/Fees" if applicable. The app currently doesn't have a separate field for "Wholesale Shipping Cost Paid by You per Item" beyond the direct labor.
+                    - **`Total Channel Costs`**: The sum of all calculated percentage fees, flat fee shares, and applicable per-item shipping costs you pay for selling through that specific channel.
+                    - **`Total Cost (Production + Channel Fees)`**:
+                        - **Concept:** This is arguably the most important cost figure for decision-making per channel. It represents your *total out-of-pocket expense to produce AND sell one item* via that channel.
+                        - **Calculation:** `Total Production Cost/Item (from section A) + Total Channel Costs (for this specific channel)`.
+                    - **`Profit per Item` (for this channel)**:
+                        - **Concept:** The actual monetary profit you make on one item sold through this channel.
+                        - **Calculation:** `Selling Price (for this channel) - Total Cost (Production + Channel Fees for this channel)`.
+                    - **`Margin (%)` (for this channel)**:
+                        - **Concept:** Your profit as a percentage of the selling price for that channel. A key indicator of profitability efficiency.
+                        - **Calculation:** `(Profit per Item (for this channel) / Selling Price (for this channel)) * 100%`. If the selling price for the channel is zero, the margin will be N/A or an error.
+
+                    ---
+                    #### **D. Blended Performance (Weighted by Distribution):**
+                    These metrics give you an overall financial picture for the product, considering your sales mix between retail and wholesale. The "Distribution %" you set in "Manage Products -> Other Costs & Pricing" is used here.
+
+                    - **`Weighted Average Selling Price/Item`**:
+                        - **Calculation:** `(Retail Price/Item * Retail Distribution %) + (Wholesale Price/Item * Wholesale Distribution %)`.
+                    - **`Weighted Average Total Cost/Item`**:
+                        - **Calculation:** `(Total Cost Retail Item * Retail Distribution %) + (Total Cost Wholesale Item * Wholesale Distribution %)`.
+                    - **`Weighted Average Profit/Item`**:
+                        - **Calculation:** `Weighted Average Selling Price/Item - Weighted Average Total Cost/Item`.
+                    - **`Weighted Average Margin (%)`**:
+                        - **Calculation:** `(Weighted Average Profit/Item / Weighted Average Selling Price/Item) * 100%`. (Ensure Weighted Average Selling Price is not zero).
+                    - **Significance:** These blended figures are crucial for understanding the product's overall financial viability given your current sales strategy. If your blended profit or margin is too low, you may need to adjust prices, reduce costs, or rethink your channel distribution strategy.
+
+                    *By regularly reviewing this entire breakdown, you can identify areas to improve efficiency, negotiate better supplier prices, adjust your own selling prices, and make strategic decisions about which products to focus on and how to sell them.*
                 """)
             st.markdown("---")
+
             with st.expander("⚙️ User Settings & Profile", expanded=False):
                 st.markdown("### Updating Your Profile & Password")
                 st.markdown("""
-                    - **Profile Information:** Update your display `Name` and `Email`. Click **"Save User Details"**.
-                    - **Update Password:** Enter current and new passwords. Click **"Reset password"**.
+                    *Purpose: Manage your personal account details and security settings.*
+                    *Concept: Keeping your profile information up-to-date ensures a personalized experience and maintaining a strong, unique password enhances the security of your business data.*
+                    
+                    **Profile Information:**
+                    - **`Name`:** This is the display name used in the welcome message (e.g., "Welcome, John Doe!").
+                    - **`Email`:** Your email address associated with the account. This might be used for account recovery or notifications in future versions of the application.
+                    - **How to Update:** Enter your desired `Name` and/or `Email` into the respective fields and click the **"Save User Details"** button. The changes will be saved, and your display name in the sidebar will update upon the next page refresh.
+                    
+                    **Update Password:**
+                    - **Concept:** Regularly updating your password is a good security practice.
+                    - **How to Update:**
+                        1.  Enter your *current* password in the "Current Password" field.
+                        2.  Enter your *new* password in the "New Password" field. Choose a strong password that is difficult to guess.
+                        3.  Repeat your *new* password in the "Repeat New Password" field for confirmation.
+                        4.  Click the **"Reset password"** button.
+                    - If successful, your password will be updated, and you will need to use the new password for your next login.
                 """)
+            
             st.markdown("---")
-            st.success("🎉 You've reached the end of the User Guide!")
+            st.success("🎉 You've reached the end of the User Guide! If you have more questions, consider re-reading the relevant sections or experimenting in the app to see how different inputs affect the calculations.")
 
         elif choice == "User Settings":
             st.header("⚙️ User Settings")
