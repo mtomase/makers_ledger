@@ -321,14 +321,14 @@ if authentication_status:
             menu_titles = [
                 "Manage Ingredients", "Manage Employees", 
                 "Manage Production Tasks", "Manage Shipping Tasks", 
-                "Global Costs/Salaries", "Manage Products", 
-                "Product Cost Breakdown", 
-                "User Guide", "User Settings"  # New section
+                "Manage Products", "Global Costs/Salaries", 
+                "Product Cost Breakdown", "User Settings", 
+                "User Guide"  # New section
             ]
             menu_icons = [
                 "bi-basket3-fill", "bi-people-fill", "bi-tools", "bi-truck", 
-                "bi-globe2", "bi-box-seam-fill", "bi-bar-chart-line-fill", 
-                "bi-book-half", "bi-gear-fill"  # New icon
+                "bi-box-seam-fill", "bi-globe2", "bi-bar-chart-line-fill", 
+                "bi-gear-fill", "bi-book-half"  # New icon
             ]
             
             default_selection_index = 0 # Default to the first item
