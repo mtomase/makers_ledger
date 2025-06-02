@@ -2,6 +2,7 @@
 streamlit
 streamlit-authenticator>=0.3.0
 streamlit-option-menu
+streamlit_js_eval
 sqlalchemy
 psycopg2-binary
 passlib
