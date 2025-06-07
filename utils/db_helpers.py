@@ -1,11 +1,18 @@
 # utils/db_helpers.py
 
-from sqlalchemy.orm import Session
-from typing import Type, List, TypeVar
-from models import Base
+from sqlalchemy.orm import Session, Mapped
+from typing import Type, List, TypeVar, Protocol
 
-# Define a TypeVar for generic model types
-T = TypeVar('T', bound=Base)
+# --- NEW: Define a Protocol for type safety ---
+# This tells the type checker that any model used with get_all_for_user
+# MUST have a 'user_id' attribute that is an integer.
+class UserBoundModel(Protocol):
+    user_id: Mapped[int]
+
+# --- UPDATED: Bind the TypeVar to the new Protocol ---
+# Now, T is not just any model based on Base, but one that specifically
+# fulfills the UserBoundModel contract.
+T = TypeVar('T', bound=UserBoundModel)
 
 def create_ingredient_display_string(name: str, provider: str = None) -> str:
     """
@@ -16,7 +23,6 @@ def create_ingredient_display_string(name: str, provider: str = None) -> str:
         return f"{name} ({provider})"
     return name
 
-# --- NEW FUNCTION ---
 def get_all_for_user(
     db: Session, 
     model: Type[T], 
@@ -25,6 +31,7 @@ def get_all_for_user(
 ) -> List[T]:
     """
     Generic function to retrieve all records of a given model for a specific user.
+    The model must have a `user_id` attribute.
 
     Args:
         db (Session): The database session.
@@ -35,8 +42,9 @@ def get_all_for_user(
     Returns:
         List[T]: A list of model instances.
     """
+    # The type checker is now happy because it knows `model` is guaranteed
+    # to have the .user_id attribute due to the TypeVar's bound Protocol.
     query = db.query(model).filter(model.user_id == user_id)
     if order_by_col is not None:
         query = query.order_by(order_by_col)
     return query.all()
-# --- END NEW FUNCTION ---
