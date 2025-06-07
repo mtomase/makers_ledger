@@ -15,32 +15,28 @@ def render(db: Session, user: User, is_mobile: bool):
     # --- Section 1: Stock Level Overview & Reorder Point Editor ---
     st.subheader("Current Stock Levels")
     
-    # Eagerly load the stock_additions relationship to prevent lazy loading later
     ingredients = db.query(Ingredient).options(joinedload(Ingredient.stock_additions)).filter(Ingredient.user_id == user.id).order_by(Ingredient.name).all()
     if not ingredients:
         st.info("No ingredients found. Please add some in the 'Manage Ingredients' page first.")
         return
 
-    # Prepare data for the editor
     stock_data = []
     for ing in ingredients:
-        # --- NEW: Low Stock Logic ---
         is_low_stock = False
         if ing.reorder_threshold_grams is not None and ing.current_stock_grams <= ing.reorder_threshold_grams:
             is_low_stock = True
         
         stock_data.append({
             "ID": ing.id,
-            "Ingredient": f"⚠️ {ing.name}" if is_low_stock else ing.name, # Add visual indicator
+            "Ingredient": f"⚠️ {ing.name}" if is_low_stock else ing.name,
             "Provider": ing.provider or "-",
             "Current Stock (g)": ing.current_stock_grams,
             "Reorder Threshold (g)": ing.reorder_threshold_grams,
-            "_is_low_stock": is_low_stock # Hidden column for styling
+            "_is_low_stock": is_low_stock
         })
     
     stock_df = pd.DataFrame(stock_data)
 
-    # --- NEW: Styling for Low Stock ---
     def highlight_low_stock(row):
         return ['background-color: #FFD2D2; color: #D8000C;' if row._is_low_stock else '' for _ in row]
 
@@ -48,7 +44,7 @@ def render(db: Session, user: User, is_mobile: bool):
         stock_df.style.apply(highlight_low_stock, axis=1),
         column_config={
             "ID": None,
-            "_is_low_stock": None, # Hide the helper column
+            "_is_low_stock": None,
             "Ingredient": st.column_config.TextColumn("Ingredient"),
             "Provider": st.column_config.TextColumn("Provider"),
             "Current Stock (g)": st.column_config.NumberColumn("Current Stock (g)", format="%.2f g"),
@@ -66,14 +62,17 @@ def render(db: Session, user: User, is_mobile: bool):
     with col1:
         st.subheader("✍️ Edit Reorder Thresholds")
         with st.form("reorder_form"):
-            # Use a dictionary for easier lookup
             ingredient_thresholds = {ing.id: ing.reorder_threshold_grams for ing in ingredients}
             
             for ing_id, current_threshold in ingredient_thresholds.items():
                 ing_obj = next((ing for ing in ingredients if ing.id == ing_id), None)
                 if ing_obj:
+                    # --- THIS IS THE CORRECTED LINE ---
+                    # Use the helper function to create a consistent and clear label
+                    display_label = create_ingredient_display_string(ing_obj.name, ing_obj.provider)
+                    
                     new_val = st.number_input(
-                        f"{ing_obj.name} (g)", 
+                        f"{display_label} (g)", # Use the new display_label
                         min_value=0, 
                         value=int(current_threshold) if current_threshold is not None else 0,
                         key=f"reorder_{ing_id}"
@@ -93,7 +92,6 @@ def render(db: Session, user: User, is_mobile: bool):
                 except Exception as e:
                     db.rollback()
                     st.error(f"Error saving thresholds: {e}")
-
 
     with col2:
         st.subheader("➕ Record New Stock Purchase")
@@ -144,7 +142,6 @@ def render(db: Session, user: User, is_mobile: bool):
 
     st.markdown("---")
 
-    # --- NEW Section 3: Purchase History Viewer ---
     st.subheader("📜 Purchase History")
     
     history_ing_display = st.selectbox(
