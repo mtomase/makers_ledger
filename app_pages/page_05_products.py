@@ -1,7 +1,7 @@
 # app_pages/page_05_products.py
 import streamlit as st
 import pandas as pd
-from sqlalchemy.orm import Session, selectinload, joinedload
+from sqlalchemy.orm import Session, selectinload
 from decimal import Decimal
 
 from models import (
@@ -13,7 +13,6 @@ from utils.db_helpers import get_all_for_user, create_ingredient_display_string
 def render(db: Session, user: User, is_mobile: bool):
     st.header("📦 Manage Products")
     
-    # Product Selection
     products = get_all_for_user(db, Product, user.id, order_by_col=Product.product_name)
     product_options = {p.product_name: p.id for p in products}
     
@@ -29,7 +28,6 @@ def render(db: Session, user: User, is_mobile: bool):
     
     if st.session_state.get("selected_product_id"):
         render_product_detail_manager(db, user, is_mobile)
-
     elif selected_product_name is None:
         st.session_state.selected_product_id = None
         render_add_new_product(db, user)
@@ -69,7 +67,6 @@ def render_product_detail_manager(db: Session, user: User, is_mobile: bool):
 
     st.subheader(f"Editing: {product.product_name}")
 
-    # --- NEW: Production Simulation Section ---
     st.markdown("---")
     st.subheader("🏭 Simulate Production Run")
     st.write("Calculate required ingredients for a production run and deduct them from your inventory.")
@@ -86,7 +83,6 @@ def render_product_detail_manager(db: Session, user: User, is_mobile: bool):
                     required_ingredients[material.ingredient_id] = {'needed': Decimal('0'), 'name': material.ingredient_ref.name}
                 required_ingredients[material.ingredient_id]['needed'] += total_needed
 
-            # Check stock levels
             ingredients_to_check_ids = list(required_ingredients.keys())
             ingredients_in_db = db.query(Ingredient).filter(Ingredient.id.in_(ingredients_to_check_ids)).all()
             
@@ -102,13 +98,11 @@ def render_product_detail_manager(db: Session, user: User, is_mobile: bool):
 
             if stock_ok:
                 try:
-                    # Deduct stock
                     for ing_db in ingredients_in_db:
                         ing_db.current_stock_grams -= required_ingredients[ing_db.id]['needed']
                     
                     db.commit()
                     st.success(f"✅ Production run successful! Stock for {len(ingredients_in_db)} ingredients has been deducted.")
-                    # We don't rerun here to allow user to see the success message clearly
                 except Exception as e:
                     db.rollback()
                     st.error(f"An error occurred during stock deduction: {e}")
@@ -118,10 +112,6 @@ def render_product_detail_manager(db: Session, user: User, is_mobile: bool):
                     st.markdown(msg)
 
     st.markdown("---")
-    # --- END: Production Simulation Section ---
-
-
-    # --- Existing Product Management Tabs ---
     tab_titles = ["Recipe / Materials", "Production Tasks", "Shipping Tasks", "Pricing & Costs"]
     tabs = st.tabs(tab_titles)
 
@@ -134,7 +124,6 @@ def render_product_detail_manager(db: Session, user: User, is_mobile: bool):
     with tabs[3]:
         render_pricing_tab(db, user, product)
 
-# ... (The rest of the functions: render_materials_tab, render_production_tasks_tab, etc. remain the same) ...
 def render_materials_tab(db: Session, user: User, product: Product):
     st.subheader("Recipe / Materials")
     st.write("Define the ingredients and quantities (in grams) required for one batch of this product.")
@@ -142,8 +131,13 @@ def render_materials_tab(db: Session, user: User, product: Product):
     all_ingredients = get_all_for_user(db, Ingredient, user.id, order_by_col=Ingredient.name)
     ingredient_options = {create_ingredient_display_string(ing.name, ing.provider): ing.id for ing in all_ingredients}
     
+    # --- FIX #1: The dataframe now needs to hold the DISPLAY STRING, not the ID ---
     materials_data = [
-        {"ID": mat.id, "Ingredient ID": mat.ingredient_id, "Quantity (grams)": mat.quantity_grams}
+        {
+            "ID": mat.id, 
+            "Ingredient": create_ingredient_display_string(mat.ingredient_ref.name, mat.ingredient_ref.provider), 
+            "Quantity (grams)": mat.quantity_grams
+        }
         for mat in product.materials
     ]
     materials_df = pd.DataFrame(materials_data)
@@ -154,10 +148,10 @@ def render_materials_tab(db: Session, user: User, product: Product):
         key="materials_editor",
         column_config={
             "ID": None,
-            "Ingredient ID": st.column_config.SelectboxColumn(
+            # --- FIX #2: Use the display strings as options and remove format_func ---
+            "Ingredient": st.column_config.SelectboxColumn(
                 "Ingredient*",
-                options=list(ingredient_options.values()),
-                format_func=lambda ing_id: next((k for k, v in ingredient_options.items() if v == ing_id), "Unknown"),
+                options=list(ingredient_options.keys()),
                 required=True,
             ),
             "Quantity (grams)": st.column_config.NumberColumn("Quantity (grams)*", min_value=0.0, required=True)
@@ -168,27 +162,28 @@ def render_materials_tab(db: Session, user: User, product: Product):
 
     if st.button("Save Recipe Changes", type="primary", key="save_materials"):
         try:
-            # Handle deletions
             original_ids = set(materials_df['ID'].dropna())
             edited_ids = set(edited_materials_df['ID'].dropna())
             ids_to_delete = original_ids - edited_ids
             if ids_to_delete:
                 db.query(ProductMaterial).filter(ProductMaterial.id.in_(ids_to_delete)).delete(synchronize_session=False)
 
-            # Handle additions and updates
             for _, row in edited_materials_df.iterrows():
                 mat_id = row.get('ID')
-                ing_id = row.get('Ingredient ID')
+                # --- FIX #3: Get the display string from the row and look up the ID ---
+                ingredient_display_string = row.get('Ingredient')
+                ing_id = ingredient_options.get(ingredient_display_string)
+                
                 quantity = row.get('Quantity (grams)')
                 
                 if not ing_id or quantity is None:
                     st.warning("Skipping row with missing Ingredient or Quantity.")
                     continue
 
-                if pd.isna(mat_id): # New row
+                if pd.isna(mat_id):
                     new_material = ProductMaterial(product_id=product.id, ingredient_id=ing_id, quantity_grams=Decimal(str(quantity)))
                     db.add(new_material)
-                else: # Existing row
+                else:
                     material_to_update = db.query(ProductMaterial).filter(ProductMaterial.id == mat_id).first()
                     if material_to_update:
                         material_to_update.ingredient_id = ing_id
@@ -207,21 +202,25 @@ def render_tasks_tab_factory(task_type, standard_task_model, product_task_model,
         st.write(f"Define the {task_type.lower()} tasks and time required for one batch of this product.")
 
         all_employees = get_all_for_user(db, Employee, user.id, order_by_col=Employee.name)
+        # --- FIX #4: Add a "N/A" option to the dictionary for display ---
         employee_options = {emp.name: emp.id for emp in all_employees}
+        employee_options["N/A"] = None
         
         all_standard_tasks = get_all_for_user(db, standard_task_model, user.id, order_by_col=standard_task_model.task_name)
         task_options = {task.task_name: task.id for task in all_standard_tasks}
 
-        tasks_data = [
-            {
+        # --- FIX #5: The dataframe now needs to hold the DISPLAY STRINGS, not the IDs ---
+        tasks_data = []
+        for task in getattr(product, product_relationship_name):
+            employee_name = next((name for name, id in employee_options.items() if id == task.employee_id), "N/A")
+            task_name = next((name for name, id in task_options.items() if id == task.standard_task_id), "Unknown")
+            tasks_data.append({
                 "ID": task.id,
-                "Task ID": task.standard_task_id,
-                "Employee ID": task.employee_id,
+                "Task": task_name,
+                "Employee": employee_name,
                 "Time (minutes)": task.time_minutes,
                 "Items Processed": task.items_processed_in_task
-            }
-            for task in getattr(product, product_relationship_name)
-        ]
+            })
         tasks_df = pd.DataFrame(tasks_data)
 
         edited_tasks_df = st.data_editor(
@@ -230,16 +229,15 @@ def render_tasks_tab_factory(task_type, standard_task_model, product_task_model,
             key=f"{task_type}_tasks_editor",
             column_config={
                 "ID": None,
-                "Task ID": st.column_config.SelectboxColumn(
+                # --- FIX #6: Use display strings for options and remove format_func ---
+                "Task": st.column_config.SelectboxColumn(
                     "Task*",
-                    options=list(task_options.values()),
-                    format_func=lambda task_id: next((k for k, v in task_options.items() if v == task_id), "Unknown"),
+                    options=list(task_options.keys()),
                     required=True,
                 ),
-                "Employee ID": st.column_config.SelectboxColumn(
+                "Employee": st.column_config.SelectboxColumn(
                     "Employee (Optional)",
-                    options=[None] + list(employee_options.values()),
-                    format_func=lambda emp_id: "N/A" if emp_id is None else next((k for k, v in employee_options.items() if v == emp_id), "Unknown"),
+                    options=list(employee_options.keys()),
                 ),
                 "Time (minutes)": st.column_config.NumberColumn("Time (minutes)*", min_value=0.0, required=True),
                 "Items Processed": st.column_config.NumberColumn("Items Processed in this Time*", min_value=1, step=1, required=True)
@@ -258,8 +256,13 @@ def render_tasks_tab_factory(task_type, standard_task_model, product_task_model,
 
                 for _, row in edited_tasks_df.iterrows():
                     task_instance_id = row.get('ID')
-                    std_task_id = row.get('Task ID')
-                    emp_id = row.get('Employee ID')
+                    # --- FIX #7: Get display strings from the row and look up the IDs ---
+                    task_display_string = row.get('Task')
+                    std_task_id = task_options.get(task_display_string)
+                    
+                    employee_display_string = row.get('Employee')
+                    emp_id = employee_options.get(employee_display_string)
+                    
                     time_min = row.get('Time (minutes)')
                     items_proc = row.get('Items Processed')
 
@@ -267,13 +270,13 @@ def render_tasks_tab_factory(task_type, standard_task_model, product_task_model,
                         st.warning("Skipping row with missing Task, Time, or Items Processed.")
                         continue
 
-                    if pd.isna(task_instance_id): # New
+                    if pd.isna(task_instance_id):
                         new_task = product_task_model(
                             product_id=product.id, standard_task_id=std_task_id, employee_id=emp_id,
                             time_minutes=Decimal(str(time_min)), items_processed_in_task=items_proc
                         )
                         db.add(new_task)
-                    else: # Update
+                    else:
                         task_to_update = db.query(product_task_model).filter(product_task_model.id == task_instance_id).first()
                         if task_to_update:
                             task_to_update.standard_task_id = std_task_id
