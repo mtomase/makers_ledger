@@ -16,6 +16,7 @@ credentials:
       failed_login_attempts: 0
       first_name: Manuel
       last_name: Tomas
+      name: Manuel Tomas
       password: $2b$12$plQ4F8JrTfY0l0drWXee5.WaU/7qKA3hr1/TxE1IaMYe6j/144njK
       password_hint: '*****6*'
       roles: null

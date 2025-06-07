@@ -4,7 +4,11 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from models import StandardProductionTask, StandardShippingTask, User
 
-def render(db: Session, user: User):
+# CORRECTED FUNCTION SIGNATURE
+def render(db: Session, user: User, is_mobile: bool):
+    # The 'is_mobile' argument is accepted for consistency with the main app router,
+    # even if it's not used on this specific page.
+    
     st.header("🏭 Manage Standard Tasks")
     st.write("Define reusable tasks for production and shipping. These will be available in dropdowns when managing specific products.")
 

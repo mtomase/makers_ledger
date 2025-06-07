@@ -8,15 +8,17 @@ import os
 import datetime
 from streamlit_js_eval import streamlit_js_eval
 
-# --- Refactored Imports ---
-from pages import (
+# --- CORRECTED IMPORTS ---
+from app_pages import (
     page_01_ingredients, page_02_employees, page_03_tasks, 
     page_04_global_costs, page_05_products, page_06_cost_breakdown,
     page_07_user_settings
 )
+# --- END CORRECTION ---
+
 from models import get_db, User
 from utils.auth_helpers import sync_stauth_user_to_db
-from main_app_functions import calculate_cost_breakdown # Moved calculation logic
+from main_app_functions import calculate_cost_breakdown
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Product Cost Calculator", layout="wide", initial_sidebar_state="expanded")
@@ -59,7 +61,6 @@ def main():
     if st.session_state.get("authentication_status"):
         db_session = next(get_db())
         try:
-            # --- Sync stauth user with DB user table ---
             username = st.session_state["username"]
             name = st.session_state["name"]
             email = config_auth['credentials']['usernames'][username]['email']
@@ -91,11 +92,9 @@ def main():
                         st.session_state.selected_product_id = None
                     st.rerun()
 
-            # --- Page Routing ---
             choice = st.session_state.get('main_menu_selected', menu_titles[0])
             st.title(f"🧮 Product Cost Calculator: {choice}")
 
-            # Routing dictionary for cleaner code
             page_router = {
                 "Manage Ingredients": page_01_ingredients.render,
                 "Manage Employees": page_02_employees.render,
@@ -107,7 +106,6 @@ def main():
             }
 
             if choice in page_router:
-                # Pass authenticator and config only to the settings page
                 if choice == "User Settings":
                     page_router[choice](authenticator=authenticator, config=config_auth, config_path=CONFIG_FILE_PATH)
                 else:
@@ -128,6 +126,15 @@ def main():
                 st.success('User registered successfully, please login.')
                 with open(CONFIG_FILE_PATH, 'w') as file:
                     yaml.dump(config_auth, file, default_flow_style=False)
+                # Create the user in the DB upon registration
+                db_session_reg = next(get_db())
+                try:
+                    reg_username = st.session_state.get('username')
+                    reg_name = st.session_state.get('name')
+                    reg_email = config_auth['credentials']['usernames'][reg_username]['email']
+                    sync_stauth_user_to_db(db=db_session_reg, username=reg_username, email=reg_email, name=reg_name)
+                finally:
+                    db_session_reg.close()
                 st.rerun()
         except Exception as e:
             st.error(e)
