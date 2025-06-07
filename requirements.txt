@@ -1,12 +1,21 @@
 # requirements.txt
+
+# Core Streamlit Framework & UI Components
 streamlit
-streamlit-authenticator>=0.3.0
 streamlit-option-menu
 streamlit_js_eval
+
+# Authentication & Security
+streamlit-authenticator>=0.3.0
+passlib
+bcrypt
+
+# Database & ORM
 sqlalchemy
 psycopg2-binary
-passlib
-PyYAML
-python-dotenv # Add this line if it's missing
+
+# Data Handling & Utilities
 pandas
 numpy
+PyYAML
+python-dotenv
