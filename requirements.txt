@@ -13,6 +13,7 @@ bcrypt
 # Database & ORM
 sqlalchemy
 psycopg2-binary
+alembic
 
 # Data Handling & Utilities
 pandas

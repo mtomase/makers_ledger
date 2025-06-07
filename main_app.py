@@ -12,7 +12,7 @@ from streamlit_js_eval import streamlit_js_eval
 from app_pages import (
     page_01_ingredients, page_02_employees, page_03_tasks, 
     page_04_global_costs, page_05_products, page_06_cost_breakdown,
-    page_07_user_settings
+    page_07_user_settings, page_08_stock_management # <-- Import new page
 )
 # --- END CORRECTION ---
 
@@ -71,14 +71,22 @@ def main():
                 authenticator.logout("Logout", "sidebar", key='sidebar_logout_button')
                 st.markdown("---")
                 
+                # --- UPDATED MENU ---
                 menu_titles = [
+                    "Stock Management", # <-- New page
                     "Manage Ingredients", "Manage Employees", "Manage Tasks", 
                     "Global Costs/Salaries", "Manage Products", "Product Cost Breakdown", 
                     "User Guide", "User Settings"
                 ]
-                menu_icons = ["bi-basket3-fill", "bi-people-fill", "bi-tools", "bi-globe2", "bi-box-seam-fill", "bi-bar-chart-line-fill", "bi-book-half", "bi-gear-fill"]
+                menu_icons = [
+                    "bi-box-fill", # <-- New icon
+                    "bi-basket3-fill", "bi-people-fill", "bi-tools", 
+                    "bi-globe2", "bi-box-seam-fill", "bi-bar-chart-line-fill", 
+                    "bi-book-half", "bi-gear-fill"
+                ]
+                # --- END UPDATED MENU ---
                 
-                default_index = menu_titles.index(st.session_state.get('main_menu_selected', "Manage Ingredients"))
+                default_index = menu_titles.index(st.session_state.get('main_menu_selected', "Stock Management"))
                 
                 selected_option = option_menu(
                     menu_title="🛠️ Main Menu", options=menu_titles, icons=menu_icons, 
@@ -95,7 +103,9 @@ def main():
             choice = st.session_state.get('main_menu_selected', menu_titles[0])
             st.title(f"🧮 Product Cost Calculator: {choice}")
 
+            # --- UPDATED ROUTER ---
             page_router = {
+                "Stock Management": page_08_stock_management.render, # <-- New route
                 "Manage Ingredients": page_01_ingredients.render,
                 "Manage Employees": page_02_employees.render,
                 "Manage Tasks": page_03_tasks.render,
@@ -104,6 +114,7 @@ def main():
                 "Product Cost Breakdown": page_06_cost_breakdown.render,
                 "User Settings": page_07_user_settings.render,
             }
+            # --- END UPDATED ROUTER ---
 
             if choice in page_router:
                 if choice == "User Settings":
@@ -126,7 +137,6 @@ def main():
                 st.success('User registered successfully, please login.')
                 with open(CONFIG_FILE_PATH, 'w') as file:
                     yaml.dump(config_auth, file, default_flow_style=False)
-                # Create the user in the DB upon registration
                 db_session_reg = next(get_db())
                 try:
                     reg_username = st.session_state.get('username')
@@ -140,6 +150,7 @@ def main():
             st.error(e)
 
 def render_user_guide():
+    # ... (user guide function remains the same)
     st.markdown("## 📖 User Guide: Product Cost Calculator")
     st.markdown("Welcome! This guide explains how to use the app and the key concepts behind the calculations.")
     st.markdown("---")
