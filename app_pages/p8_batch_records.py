@@ -134,7 +134,8 @@ def render_main_details_form(db: Session, user: User, batch: BatchRecord):
         ph_cured = d3.number_input("Cured pH", value=float(batch.qc_ph_cured or 0.0), format="%.2f")
         notes = st.text_area("Final Quality Notes", value=batch.qc_final_quality_notes or "")
         
-        submitted = st.form_submit_button("💾 Save Main Details", type="primary", use_container_width=True)
+        # --- FIX: Removed use_container_width=True ---
+        submitted = st.form_submit_button("💾 Save Main Details", type="primary")
         if submitted:
             with SessionLocal() as transaction_db:
                 try:

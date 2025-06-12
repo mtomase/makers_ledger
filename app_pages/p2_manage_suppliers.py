@@ -24,7 +24,7 @@ def render(db: Session, user: User, is_mobile: bool):
     df_cols = ["ID", "Supplier Name", "Email", "Website", "Phone", "Address"]
     df_for_editor = pd.DataFrame(data_for_editor, columns=df_cols)
 
-    st.info("To delete a supplier, remove its row using the trash can icon and click save.", icon="🗑️")
+    #st.info("To delete a supplier, remove its row using the trash can icon and click save.", icon="🗑️")
 
     edited_df = st.data_editor(
         df_for_editor, num_rows="dynamic", key="suppliers_editor",

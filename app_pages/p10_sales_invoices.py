@@ -136,7 +136,7 @@ def render_form_view(db: Session, user: User):
         tc3.metric("Total Amount", f"€{total:,.2f}")
         notes = st.text_area("Notes", value=invoice.notes if is_edit_mode and invoice else "")
         
-        submitted = st.form_submit_button("Save", type="primary")
+        submitted = st.form_submit_button("💾 Save", type="primary")
         if submitted:
             with SessionLocal() as transaction_db:
                 try:

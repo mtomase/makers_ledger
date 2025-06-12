@@ -35,7 +35,7 @@ def render(db: Session, user: User, is_mobile: bool):
         hide_index=True
     )
 
-    if st.button("Save Category Changes", type="primary"):
+    if st.button("💾 Save Category Changes", type="primary"):
         with SessionLocal() as transaction_db:
             try:
                 # Simple brute-force sync: delete all and re-add.

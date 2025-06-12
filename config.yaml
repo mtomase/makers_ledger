@@ -4,6 +4,13 @@ cookie:
   name: pcc_render_cookie
 credentials:
   usernames:
+    jcsanchez:
+      email: info@ossienaturals.com
+      first_name: Jesica
+      last_name: Cabrera
+      logged_in: false
+      password: $2b$12$plQ4F8JrTfY0l0drWXee5.WaU/7qKA3hr1/TxE1IaMYe6j/144njK
+      password_hint: '*****6*'
     mtomas:
       email: manuel.tomas.estarlich@gmail.com
       failed_login_attempts: 0
@@ -13,14 +20,7 @@ credentials:
       password: $2b$12$plQ4F8JrTfY0l0drWXee5.WaU/7qKA3hr1/TxE1IaMYe6j/144njK
       password_hint: '*****6*'
       roles: null
-    jcsanchez:
-      email: info@ossienaturals.com
-      first_name: Jesica
-      last_name: Cabrera
-      logged_in: false
-      password: $2b$12$plQ4F8JrTfY0l0drWXee5.WaU/7qKA3hr1/TxE1IaMYe6j/144njK
-      password_hint: '*****6*'
 preauthorized:
-  emails: 
+  emails:
   - manuel.tomas.estarlich@gmail.com
   - info@ossienaturals.com

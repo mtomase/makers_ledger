@@ -63,7 +63,7 @@ def render(db: Session, user: User, is_mobile: bool):
         hide_index=True
     )
 
-    if st.button("💾 Save All Employee Changes", type="primary"):
+    if st.button("Save All Employee Changes", type="primary"):
         with SessionLocal() as transaction_db:
             try:
                 # Get IDs before and after editing to handle deletions

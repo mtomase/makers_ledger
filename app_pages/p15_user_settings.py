@@ -7,7 +7,8 @@ import os
 
 # --- Boilerplate: Add project root to path ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from models import User, SessionLocal
+# --- FIX: Import the correct Enum name 'UserLayoutEnumDef' from your models.py ---
+from models import User, SessionLocal, UserLayoutEnumDef
 
 # --- A simple list of countries for the dropdown ---
 COUNTRY_CODES = {
@@ -30,35 +31,33 @@ def render(db: Session, user: User, authenticator, config, config_path, **kwargs
     with st.form("user_profile_form"):
         st.write(f"**Username:** `{user.username}`")
         
-        # --- MODIFIED: Placed existing and new fields inside a form ---
         new_name = st.text_input("Name:", value=user.name or "")
         new_email = st.text_input("Email:", value=user.email or "")
 
-        # --- NEW: Country Selection ---
         current_country_name = next((n for n, c in COUNTRY_CODES.items() if c == user.country_code), None)
         country_index = COUNTRY_NAMES.index(current_country_name) if current_country_name in COUNTRY_NAMES else 0
         country = st.selectbox("Country (for tax localization)", options=COUNTRY_NAMES, index=country_index)
 
-        # --- NEW: Layout Preference ---
         st.markdown("#### Page Layout Preference")
-        layout = st.radio("Layout", ["wide", "centered"], index=0 if user.layout_preference.value == 'wide' else 1, horizontal=True)
+        # Use the .value of the enum to match the string from the radio button options
+        current_layout_value = user.layout_preference.value if user.layout_preference else 'wide'
+        layout_index = 0 if current_layout_value == 'wide' else 1
+        layout = st.radio("Layout", ["wide", "centered"], index=layout_index, horizontal=True)
 
-        if st.form_submit_button("Save User Details", type="primary", use_container_width=True):
+        if st.form_submit_button("💾 Save User Details", type="primary"):
             if not new_name.strip() or not new_email.strip():
                 st.error("Name and Email cannot be empty.")
             else:
                 try:
                     with SessionLocal() as transaction_db:
-                        # Fetch a fresh instance of the user for this session
                         user_to_update = transaction_db.query(User).filter(User.id == user.id).one()
 
-                        # Update user in database
                         user_to_update.name = new_name.strip()
                         user_to_update.email = new_email.strip()
                         user_to_update.country_code = COUNTRY_CODES[country]
-                        user_to_update.layout_preference = layout
+                        # --- FIX: Convert the string 'wide'/'centered' to the correct ENUM member ---
+                        user_to_update.layout_preference = UserLayoutEnumDef(layout)
                         
-                        # Update user in config file for authenticator
                         config['credentials']['usernames'][user.username]['name'] = user_to_update.name
                         config['credentials']['usernames'][user.username]['email'] = user_to_update.email
                         
@@ -67,7 +66,6 @@ def render(db: Session, user: User, authenticator, config, config_path, **kwargs
                         with open(config_path, 'w') as file:
                             yaml.dump(config, file, default_flow_style=False)
                         
-                        # Update session state to reflect name change immediately
                         st.session_state['name'] = user_to_update.name
                         
                         st.success("User details updated successfully!")
@@ -79,7 +77,6 @@ def render(db: Session, user: User, authenticator, config, config_path, **kwargs
     st.subheader("Update Password")
     try:
         if authenticator.reset_password(username=user.username, location='main'):
-            # The widget handles the form submission. We now need to sync the change to the DB.
             new_hashed_password = config['credentials']['usernames'][user.username]['password']
             
             try:

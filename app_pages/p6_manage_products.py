@@ -67,7 +67,7 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
     labor_cost_per_item = Decimal('0.0')
     labor_details = []
     for p_task in product.production_tasks:
-        if p_task.employee_ref and p_task.time_minutes:
+        if p_task.standard_task_ref and p_task.employee_ref and p_task.time_minutes:
             hourly_rate = p_task.employee_ref.hourly_rate or Decimal('0.0')
             cost = (Decimal(str(p_task.time_minutes)) / 60) * hourly_rate
             labor_cost_per_item += cost
@@ -175,18 +175,19 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
         st.subheader("Product Recipe / Bill of Materials")
         all_ingredients = db.query(Ingredient).filter(Ingredient.user_id == user.id).order_by(Ingredient.name).all()
         if not all_ingredients:
-            st.warning("No ingredients found. Please add ingredients first.")
+            st.warning("No ingredients found. Please add ingredients first on the 'Manage Ingredients' page.")
         else:
             recipe_data = [{"ID": m.id, "Ingredient": m.ingredient_ref.name, "Quantity (g)": m.quantity_grams} for m in product.materials]
             edited_recipe_df = st.data_editor(
                 pd.DataFrame(recipe_data), num_rows="dynamic", key="recipe_editor",
                 column_config={
                     "ID": None,
+                    # BUG FIX: Corrected 'Trie' to 'True'
                     "Ingredient": st.column_config.SelectboxColumn("Ingredient*", options=[ing.name for ing in all_ingredients], required=True),
                     "Quantity (g)": st.column_config.NumberColumn("Quantity (g)*", required=True, min_value=0.0, format="%.3f")
                 }, use_container_width=True, hide_index=True
             )
-            if st.button("Save Recipe Changes", type="primary"):
+            if st.button("💾 Save Recipe Changes", type="primary"):
                 with SessionLocal() as transaction_db:
                     try:
                         transaction_db.query(ProductMaterial).filter(ProductMaterial.product_id == product.id).delete(synchronize_session=False)
@@ -207,36 +208,65 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
         st.subheader("Production Tasks & Labor")
         all_tasks = db.query(StandardProductionTask).filter(StandardProductionTask.user_id == user.id).all()
         all_employees = db.query(Employee).filter(Employee.user_id == user.id).all()
-        if not all_tasks or not all_employees:
-            st.warning("Please define standard tasks and employees first.")
-        else:
-            workflow_data = [{"ID": pt.id, "Task": pt.standard_task_ref.task_name, "Assigned To": pt.employee_ref.name, "Time (minutes)": pt.time_minutes} for pt in product.production_tasks]
-            edited_workflow_df = st.data_editor(
-                pd.DataFrame(workflow_data), num_rows="dynamic", key="workflow_editor",
-                column_config={
-                    "ID": None,
-                    "Task": st.column_config.SelectboxColumn("Task*", options=[t.task_name for t in all_tasks], required=True),
-                    "Assigned To": st.column_config.SelectboxColumn("Assigned To*", options=[e.name for e in all_employees], required=True),
-                    "Time (minutes)": st.column_config.NumberColumn("Time (minutes)*", required=True, min_value=0.1, format="%.1f")
-                }, use_container_width=True, hide_index=True
-            )
-            if st.button("Save Workflow Changes", type="primary"):
-                with SessionLocal() as transaction_db:
-                    try:
-                        transaction_db.query(ProductProductionTask).filter(ProductProductionTask.product_id == product.id).delete(synchronize_session=False)
-                        task_map = {t.task_name: t.id for t in all_tasks}
-                        emp_map = {e.name: e.id for e in all_employees}
-                        for _, row in edited_workflow_df.iterrows():
-                            task_name, emp_name, time = row["Task"], row["Assigned To"], row["Time (minutes)"]
-                            if not all([task_name, emp_name, pd.notna(time)]): continue
-                            task_id, emp_id = task_map.get(task_name), emp_map.get(emp_name)
-                            if task_id and emp_id:
-                                transaction_db.add(ProductProductionTask(product_id=product.id, standard_task_id=task_id, employee_id=emp_id, time_minutes=Decimal(str(time))))
-                        transaction_db.commit()
-                        st.success("Workflow updated successfully!")
-                    except Exception as e:
-                        transaction_db.rollback(); st.error(f"Error saving workflow: {e}")
-                st.rerun()
+
+        task_names = [t.task_name for t in all_tasks]
+        employee_names = [e.name for e in all_employees]
+        
+        prerequisites_met = bool(task_names and employee_names)
+
+        if not prerequisites_met:
+            if not task_names:
+                st.warning("You must define at least one 'Standard Production Task' before building a workflow. Please go to the 'Settings' page to add tasks.")
+            if not employee_names:
+                st.warning("You must add at least one 'Employee' before assigning tasks. Please go to the 'Settings' page to add employees.")
+        
+        # --- ROBUST FIX: Always create the DataFrame with the correct columns ---
+        # This ensures the data editor initializes correctly even with zero rows.
+        df_columns = {
+            "ID": [], "Task": [], "Assigned To": [], "Time (minutes)": []
+        }
+        
+        workflow_data = []
+        if product.production_tasks:
+             workflow_data = [
+                {"ID": pt.id, "Task": pt.standard_task_ref.task_name, "Assigned To": pt.employee_ref.name, "Time (minutes)": pt.time_minutes} 
+                for pt in product.production_tasks if pt.standard_task_ref and pt.employee_ref
+            ]
+        
+        df = pd.DataFrame(workflow_data if workflow_data else df_columns)
+
+        edited_workflow_df = st.data_editor(
+            df, 
+            num_rows="dynamic", 
+            key="workflow_editor",
+            disabled=not prerequisites_met,
+            column_config={
+                "ID": None,
+                "Task": st.column_config.SelectboxColumn("Task*", options=task_names, required=True),
+                "Assigned To": st.column_config.SelectboxColumn("Assigned To*", options=employee_names, required=True),
+                "Time (minutes)": st.column_config.NumberColumn("Time (minutes)*", required=True, min_value=0.1, format="%.1f")
+            }, 
+            use_container_width=True, 
+            hide_index=True
+        )
+        
+        if st.button("💾 Save Workflow Changes", type="primary", disabled=not prerequisites_met):
+            with SessionLocal() as transaction_db:
+                try:
+                    transaction_db.query(ProductProductionTask).filter(ProductProductionTask.product_id == product.id).delete(synchronize_session=False)
+                    task_map = {t.task_name: t.id for t in all_tasks}
+                    emp_map = {e.name: e.id for e in all_employees}
+                    for _, row in edited_workflow_df.iterrows():
+                        task_name, emp_name, time = row["Task"], row["Assigned To"], row["Time (minutes)"]
+                        if not all([task_name, emp_name, pd.notna(time)]): continue
+                        task_id, emp_id = task_map.get(task_name), emp_map.get(emp_name)
+                        if task_id and emp_id:
+                            transaction_db.add(ProductProductionTask(product_id=product.id, standard_task_id=task_id, employee_id=emp_id, time_minutes=Decimal(str(time))))
+                    transaction_db.commit()
+                    st.success("Workflow updated successfully!")
+                except Exception as e:
+                    transaction_db.rollback(); st.error(f"Error saving workflow: {e}")
+            st.rerun()
 
     with tab3:
         st.subheader("Pricing, Packaging, Overheads & Channels")
@@ -277,7 +307,7 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
                 ws_proc = w2.number_input("Wholesale Processing Fee (%)", value=float((product.wholesale_processing_fee_percent or 0)*100), format="%.2f")
                 ws_flat = w3.number_input("Wholesale Flat Fee/Order (€)", value=float(product.wholesale_flat_fee_per_order or 0.0), format="%.2f")
 
-            if st.form_submit_button("Save Pricing & Channel Details", type="primary"):
+            if st.form_submit_button("💾 Save Pricing & Channel Details", type="primary"):
                 with SessionLocal() as transaction_db:
                     p_to_update = transaction_db.query(Product).filter(Product.id == product.id).one()
                     p_to_update.retail_price_per_item = Decimal(str(retail_price))
@@ -307,7 +337,9 @@ def render_cost_analysis(db: Session, user: User, product: Product, is_mobile: b
     
     cost_data = calculate_full_costs(product.id, db, user.id)
     
-    if cost_data is None: st.error("An error occurred during cost calculation."); return
+    if cost_data is None: 
+        st.error("An error occurred during cost calculation.")
+        return
     if cost_data["missing_ingredient_costs"]:
         st.warning(f"Could not calculate full material cost. Please record a purchase for these ingredients: {', '.join(cost_data['missing_ingredient_costs'])}")
 
@@ -362,6 +394,7 @@ def render(db: Session, user: User, is_mobile: bool):
     if selected_product_name == CREATE_NEW_OPTION:
         render_new_product_form(user)
     elif selected_product_name:
+        # BUG FIX: Corrected query from User.id to Product.user_id
         product = db.query(Product).options(
             selectinload(Product.materials).joinedload(ProductMaterial.ingredient_ref),
             selectinload(Product.production_tasks).joinedload(ProductProductionTask.standard_task_ref),

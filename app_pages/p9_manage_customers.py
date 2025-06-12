@@ -87,7 +87,7 @@ def render_customer_form(db: Session, user: User):
         address = st.text_area("Address", value=customer.address if customer else "")
         vat_number = st.text_input("VAT Number", value=customer.vat_number if customer else "")
         
-        submitted = st.form_submit_button("Save", type="primary")
+        submitted = st.form_submit_button("💾 Save", type="primary")
         if submitted:
             if not name:
                 st.error("Customer Name is a required field.")
