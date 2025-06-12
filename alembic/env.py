@@ -1,38 +1,34 @@
-# alembic/env.py
+# In alembic/env.py
+
 import os
 import sys
 from logging.config import fileConfig
+
+# ADD THIS to load the .env file
+from dotenv import load_dotenv
+load_dotenv()
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
 
-# --- START OF OUR CUSTOMIZATIONS ---
-
-# 1. Load environment variables from .env file
-from dotenv import load_dotenv
-load_dotenv()
-
-# 2. Add the project root to the Python path
-# This allows Alembic to find your 'models.py' file
+# Add the project root to the Python path to find the models module
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..')))
+from models import Base
 
-# 3. Import your Base model from your models file
-from models import Base, DATABASE_URL
-
-# --- END OF OUR CUSTOMIZATIONS ---
-
-
-# This is the Alembic Config object, which provides
+# this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-# --- MORE CUSTOMIZATIONS ---
-# 4. Set the sqlalchemy.url in the config object dynamically
-# This ensures Alembic uses the same database as your app
-config.set_main_option('sqlalchemy.url', DATABASE_URL)
-# --- END MORE CUSTOMIZATIONS ---
+# --- ADD THIS ---
+# Set the sqlalchemy.url from the environment variable
+# This ensures alembic uses the same database as your app
+db_url = os.getenv("DATABASE_URL")
+if not db_url:
+    raise ValueError("DATABASE_URL environment variable not set. Please check your .env file.")
+config.set_main_option('sqlalchemy.url', db_url)
+# --- END ADD ---
 
 
 # Interpret the config file for Python logging.
@@ -41,12 +37,6 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-
-# --- FINAL CUSTOMIZATION ---
-# 5. Point Alembic to your Base model's metadata
 target_metadata = Base.metadata
 # --- END FINAL CUSTOMIZATION ---
 

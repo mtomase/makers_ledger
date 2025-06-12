@@ -1,38 +1,67 @@
 # main_app.py
 import streamlit as st
 import streamlit_authenticator as stauth
-from streamlit_option_menu import option_menu
 import yaml
 from yaml.loader import SafeLoader
 import os
 import datetime
 from streamlit_js_eval import streamlit_js_eval
 
-# --- CORRECTED IMPORTS ---
+# --- Model and Utility Imports ---
+from models import get_db, User, SessionLocal
+
+# --- Page Imports ---
 from app_pages import (
-    page_01_ingredients, page_02_employees, page_03_tasks, 
-    page_04_global_costs, page_05_products, page_06_cost_breakdown,
-    page_07_user_settings, page_08_stock_management # <-- Import new page
+    p1_manage_ingredients,
+    p1b_manage_ingredient_types,
+    p2_manage_suppliers,
+    p3_manage_employees,
+    p4_manage_tasks,
+    p5_global_costs,
+    p6_manage_products,
+    p7_stock_management,
+    p8_batch_records,
+    p9_manage_customers,
+    p10_sales_invoices,
+    p11_financial_settings,
+    p12_transaction_ledger,
+    p13_revenue_reports,
+    p15_user_settings 
 )
-# --- END CORRECTION ---
 
-from models import get_db, User
-from utils.auth_helpers import sync_stauth_user_to_db
-from main_app_functions import calculate_cost_breakdown
 
-# --- Page Configuration ---
-st.set_page_config(page_title="Product Cost Calculator", layout="wide", initial_sidebar_state="expanded")
+# --- MODIFICATION: Page Configuration at the Top ---
+# This logic runs at the beginning of every script rerun.
+# It checks if a user is already logged in to set their preferred layout.
+def get_user_layout():
+    # Default to wide if no one is logged in yet.
+    layout = "wide"
+    if st.session_state.get("authentication_status"):
+        try:
+            db = SessionLocal()
+            user = db.query(User).filter(User.username == st.session_state.get("username")).first()
+            if user and user.layout_preference:
+                layout = user.layout_preference.value
+        finally:
+            db.close()
+    return layout
+
+# st.set_page_config() must be the first Streamlit command.
+st.set_page_config(
+    page_title="Maker's Ledger", 
+    page_icon="📓", 
+    layout=get_user_layout()
+)
+
 
 # --- Screen Width Detection ---
 if 'screen_width' not in st.session_state:
     st.session_state.screen_width = streamlit_js_eval(js_expressions='window.innerWidth', key='INIT_SCR_WIDTH_FETCH_STREAMLIT_MAIN_V5')
-
 if st.session_state.screen_width is None or st.session_state.screen_width == 0:
-    st.session_state.screen_width = 1024 
+    st.session_state.screen_width = 1024
     if 'initial_rerun_for_width_done_streamlit_main_v5' not in st.session_state:
         st.session_state.initial_rerun_for_width_done_streamlit_main_v5 = True
         st.rerun()
-
 MOBILE_BREAKPOINT = 768
 IS_MOBILE = st.session_state.screen_width < MOBILE_BREAKPOINT
 
@@ -50,8 +79,7 @@ authenticator = stauth.Authenticate(
     config_auth['credentials'],
     config_auth['cookie']['name'],
     config_auth['cookie']['key'],
-    config_auth['cookie']['expiry_days'],
-    pre_authorized=config_auth.get('preauthorized', {}).get('emails', [])
+    config_auth['cookie']['expiry_days']
 )
 
 # --- Main Application Flow ---
@@ -62,67 +90,92 @@ def main():
         db_session = next(get_db())
         try:
             username = st.session_state["username"]
-            name = st.session_state["name"]
-            email = config_auth['credentials']['usernames'][username]['email']
-            current_user = sync_stauth_user_to_db(db=db_session, username=username, email=email, name=name)
-            
+            current_user = db_session.query(User).filter(User.username == username).first()
+            if not current_user:
+                st.error(f"User '{username}' found in authenticator but not in the database. Please contact support.")
+                st.stop()
+
+            # --- REMOVED: The incorrect call to set_page_layout was here ---
+
             with st.sidebar:
                 st.success(f"Welcome, **{current_user.name}**!")
                 authenticator.logout("Logout", "sidebar", key='sidebar_logout_button')
                 st.markdown("---")
-                
-                # --- UPDATED MENU ---
-                menu_titles = [
-                    "Stock Management", # <-- New page
-                    "Manage Ingredients", "Manage Employees", "Manage Tasks", 
-                    "Global Costs/Salaries", "Manage Products", "Product Cost Breakdown", 
-                    "User Guide", "User Settings"
+
+                financials_pages = [
+                    "Manage Customers",
+                    "Sales Invoices",
+                    "Transaction Ledger",
+                    "Financial Settings",
                 ]
-                menu_icons = [
-                    "bi-box-fill", # <-- New icon
-                    "bi-basket3-fill", "bi-people-fill", "bi-tools", 
-                    "bi-globe2", "bi-box-seam-fill", "bi-bar-chart-line-fill", 
-                    "bi-book-half", "bi-gear-fill"
-                ]
-                # --- END UPDATED MENU ---
-                
-                default_index = menu_titles.index(st.session_state.get('main_menu_selected', "Stock Management"))
-                
-                selected_option = option_menu(
-                    menu_title="🛠️ Main Menu", options=menu_titles, icons=menu_icons, 
-                    menu_icon="bi-list-task", default_index=default_index,
-                    orientation="vertical", key="main_menu_option_selector"
-                )
+                if current_user.country_code == 'IE':
+                    financials_pages.insert(3, "Revenue Reports")
 
-                if selected_option != st.session_state.get('main_menu_selected'):
-                    st.session_state.main_menu_selected = selected_option
-                    if selected_option not in ["Manage Products", "Product Cost Breakdown"]:
-                        st.session_state.selected_product_id = None
-                    st.rerun()
+                menu_groups = {
+                    "Setup & Configuration": [
+                        "Manage Ingredients", 
+                        "Manage Ingredient Types",
+                        "Manage Suppliers", 
+                        "Manage Employees", 
+                        "Manage Tasks", 
+                        "Global Costs"
+                    ],
+                    "Operations & Analysis": [
+                        "Manage Products", 
+                        "Stock Management", 
+                        "Batch Records"
+                    ],
+                    "Financials": financials_pages,
+                    "Application & User": ["User Settings"]
+                }
 
-            choice = st.session_state.get('main_menu_selected', menu_titles[0])
-            st.title(f"🧮 Product Cost Calculator: {choice}")
+                if 'active_page' not in st.session_state or st.session_state.active_page not in [p for pages in menu_groups.values() for p in pages]:
+                    st.session_state.active_page = "Manage Products"
 
-            # --- UPDATED ROUTER ---
+                def set_active_page(page):
+                    st.session_state.active_page = page
+
+                for group_name, pages in menu_groups.items():
+                    is_expanded = any(page == st.session_state.active_page for page in pages)
+                    with st.expander(group_name, expanded=is_expanded):
+                        for page in pages:
+                            button_type = "primary" if st.session_state.active_page == page else "secondary"
+                            st.button(
+                                page, 
+                                on_click=set_active_page, 
+                                args=(page,), 
+                                key=f"btn_{page.replace(' ', '_')}", 
+                                use_container_width=True, 
+                                type=button_type
+                            )
+
+            active_page = st.session_state.active_page
+            st.title(f"🧮 {active_page}")
+
             page_router = {
-                "Stock Management": page_08_stock_management.render, # <-- New route
-                "Manage Ingredients": page_01_ingredients.render,
-                "Manage Employees": page_02_employees.render,
-                "Manage Tasks": page_03_tasks.render,
-                "Global Costs/Salaries": page_04_global_costs.render,
-                "Manage Products": page_05_products.render,
-                "Product Cost Breakdown": page_06_cost_breakdown.render,
-                "User Settings": page_07_user_settings.render,
+                "Manage Ingredients": p1_manage_ingredients.render,
+                "Manage Ingredient Types": p1b_manage_ingredient_types.render,
+                "Manage Suppliers": p2_manage_suppliers.render,
+                "Manage Employees": p3_manage_employees.render,
+                "Manage Tasks": p4_manage_tasks.render,
+                "Global Costs": p5_global_costs.render,
+                "Manage Products": p6_manage_products.render,
+                "Stock Management": p7_stock_management.render,
+                "Batch Records": p8_batch_records.render,
+                "Manage Customers": p9_manage_customers.render,
+                "Sales Invoices": p10_sales_invoices.render,
+                "Financial Settings": p11_financial_settings.render,
+                "Transaction Ledger": p12_transaction_ledger.render,
+                "Revenue Reports": p13_revenue_reports.render,
+                "User Settings": p15_user_settings.render,
             }
-            # --- END UPDATED ROUTER ---
 
-            if choice in page_router:
-                if choice == "User Settings":
-                    page_router[choice](authenticator=authenticator, config=config_auth, config_path=CONFIG_FILE_PATH)
-                else:
-                    page_router[choice](db=db_session, user=current_user, is_mobile=IS_MOBILE)
-            elif choice == "User Guide":
-                render_user_guide()
+            render_function = page_router.get(active_page, lambda **kwargs: st.warning("Page not found."))
+            
+            if active_page == "User Settings":
+                 render_function(db=db_session, user=current_user, authenticator=authenticator, config=config_auth, config_path=CONFIG_FILE_PATH, is_mobile=IS_MOBILE)
+            else:
+                render_function(db=db_session, user=current_user, is_mobile=IS_MOBILE)
 
         finally:
             if db_session:
@@ -133,51 +186,34 @@ def main():
     elif st.session_state["authentication_status"] is None:
         st.warning("Please enter your username and password to login, or register if you are a new user.")
         try:
-            if authenticator.register_user(pre_authorized=config_auth.get('preauthorized', {}).get('emails', [])):
-                st.success('User registered successfully, please login.')
-                with open(CONFIG_FILE_PATH, 'w') as file:
-                    yaml.dump(config_auth, file, default_flow_style=False)
-                db_session_reg = next(get_db())
+            email_of_registered_user, username_of_registered_user, name_of_registered_user = authenticator.register_user(pre_authorized=False)
+            if email_of_registered_user:
+                st.success('User registered successfully in authenticator. Adding to application database...')
+                db = next(get_db())
                 try:
-                    reg_username = st.session_state.get('username')
-                    reg_name = st.session_state.get('name')
-                    reg_email = config_auth['credentials']['usernames'][reg_username]['email']
-                    sync_stauth_user_to_db(db=db_session_reg, username=reg_username, email=reg_email, name=reg_name)
+                    hashed_password = config_auth['credentials']['usernames'][username_of_registered_user]['password']
+                    db_user = User(
+                        username=username_of_registered_user, 
+                        email=email_of_registered_user, 
+                        name=name_of_registered_user, 
+                        hashed_password=hashed_password,
+                        country_code='IE',
+                        layout_preference='wide'
+                    )
+                    db.add(db_user)
+                    db.commit()
+                    st.success("User added to application database. Please login to continue.")
+                    with open(CONFIG_FILE_PATH, 'w') as file:
+                        yaml.dump(config_auth, file, default_flow_style=False)
+                    st.rerun()
+                except Exception as db_error:
+                    db.rollback()
+                    st.error(f"Error saving new user to the database: {db_error}")
                 finally:
-                    db_session_reg.close()
-                st.rerun()
-        except Exception as e:
-            st.error(e)
+                    db.close()
 
-def render_user_guide():
-    # ... (user guide function remains the same)
-    st.markdown("## 📖 User Guide: Product Cost Calculator")
-    st.markdown("Welcome! This guide explains how to use the app and the key concepts behind the calculations.")
-    st.markdown("---")
-    
-    def read_guide_file(file_name):
-        try:
-            guide_path = os.path.join(SCRIPT_DIR, 'guides', file_name)
-            with open(guide_path, 'r', encoding='utf-8') as f:
-                return f.read()
         except Exception as e:
-            return f"**Error:** Could not read guide file `{file_name}`. Reason: {e}"
-
-    with st.expander("🚀 Getting Started & Navigation", expanded=True):
-        st.markdown(read_guide_file("01_getting_started.md"), unsafe_allow_html=True)
-    with st.expander("🗃️ Core Data Management Sections", expanded=False):
-        st.markdown(read_guide_file("02_core_data.md"), unsafe_allow_html=True)
-    with st.expander("📦 Manage Products (The Core Engine!)", expanded=False):
-        st.markdown(read_guide_file("03_manage_products.md"), unsafe_allow_html=True)
-    with st.expander("📈 Product Cost Breakdown Analysis", expanded=False):
-        st.markdown(read_guide_file("04_cost_breakdown.md"), unsafe_allow_html=True)
-    with st.expander("⚙️ User Settings & Profile", expanded=False):
-        st.markdown(read_guide_file("05_user_settings.md"), unsafe_allow_html=True)
-    
-    st.markdown("---")
-    st.success("🎉 You've reached the end of the User Guide!")
+            st.error(f"An error occurred during registration: {e}")
 
 if __name__ == "__main__":
     main()
-    st.markdown("---")
-    st.markdown(f"<div style='text-align: center; color: grey;'>Product Cost Calculator © {datetime.date.today().year}</div>", unsafe_allow_html=True)

@@ -1,0 +1,18 @@
+Phase,Task Group,Task ID,Task Name,Subtasks/Details,Est. Duration (Weeks/Days),Due Date (Placeholder),Status,Platform/Notes
+Phase 1: Brand & Core Messaging,Brand Identity,1.1,"Define UVP & Personal Brand Statement","Draft iterations; Incorporate 20+ yrs exp, 10x efficiency, 3 methods (Empowered Exec, Influential Ldrshp, AI Amp); Finalize keywords.",1 Week,YYYY-MM-DD,To Do,Docs/OneNote
+Phase 1: Brand & Core Messaging,Target Audience,1.2,"Identify Target Audience Personas","Detail Frustrated Exec (pains, goals); Detail Aspiring Leader (pains, goals).",3 Days,YYYY-MM-DD,To Do,Docs/OneNote
+Phase 1: Brand & Core Messaging,Narrative Mapping,1.3,"Map Core Narratives to Pillars","Pillar 1 (Partner Challenge); Pillar 2 (Conflict Rez/Partner Ldrshp); Pillar 3 (AI App).",2 Days,YYYY-MM-DD,To Do,Docs/OneNote
+Phase 2: Pillar Content Creation,Article 1,2.1,"Draft Article 1: ""The 10x Mandate...""","Follow detailed outline; Intro; Philosophy (Trust/Freedom, Doing Work, Ownership, Lead w/o Title - Conflict Rez Ex); Case Study (10x Partner Challenge); Anti-Patterns; Path to 10x; Conclusion & CTA.",2 Weeks,YYYY-MM-DD,To Do,Docs/Word
+Phase 2: Pillar Content Creation,Article 2,2.2,"Draft Article 2: ""The Amplification Advantage...""","Follow detailed outline; Intro; Austerity vs Amp; Case Study (AI Cosmetics App); Practical AI Uses; Cultivating AI Org; Conclusion & CTA.",2 Weeks,YYYY-MM-DD,To Do,Docs/Word
+Phase 3: Platform Development,Website,3.1,"Setup Basic Website (Simple Platform)","Choose platform (Carrd, Typedream, etc.); Homepage (Headline, UVP, Links); About Me/Philosophy (incl. Ldrshp style); Blog Section; Contact.",1 Week,YYYY-MM-DD,To Do,Web Platform
+Phase 3: Platform Development,Website,3.2,"Populate Website - Article 1","Upload/format Article 1.",1 Day,YYYY-MM-DD,To Do,Web Platform
+Phase 3: Platform Development,Website,3.3,"Populate Website - Article 2","Upload/format Article 2.",1 Day,YYYY-MM-DD,To Do,Web Platform
+Phase 3: Platform Development,LinkedIn Profile,3.4,"Optimize LinkedIn Profile","Update Headline, About, Experience, Featured (pin articles later), Skills, Request Recs.",3 Days,YYYY-MM-DD,To Do,LinkedIn
+Phase 4: Launch & Marketing,Article 1 Promotion,4.1,"Publish Article 1 (Website & LinkedIn)","Final checks, publish on website blog, publish as LinkedIn Article or condensed post.",1 Day,YYYY-MM-DD,To Do,Website/LinkedIn
+Phase 4: Launch & Marketing,Article 1 Promotion,4.2,"Social Media Drip Campaign - Article 1 (Posts 1-3)","Draft & schedule 3 initial posts (Launch, Key Philo, Case Study Teaser).",2 Days,YYYY-MM-DD,To Do,LinkedIn/Social Scheduler
+Phase 4: Launch & Marketing,Article 1 Promotion,4.3,"Social Media Drip Campaign - Article 1 (Posts 4-5/7)","Draft & schedule remaining posts (Ldrshp Insight, Question).",2 Days,YYYY-MM-DD,To Do,LinkedIn/Social Scheduler
+Phase 4: Launch & Marketing,Article 2 Promotion,4.4,"Publish Article 2 (Website & LinkedIn)","Final checks, publish on website blog, publish as LinkedIn Article or condensed post.",1 Day,YYYY-MM-DD,To Do,Website/LinkedIn
+Phase 4: Launch & Marketing,Article 2 Promotion,4.5,"Social Media Drip Campaign - Article 2 (Posts 1-3)","Draft & schedule 3 initial posts.",2 Days,YYYY-MM-DD,To Do,LinkedIn/Social Scheduler
+Phase 4: Launch & Marketing,Article 2 Promotion,4.6,"Social Media Drip Campaign - Article 2 (Posts 4-5/7)","Draft & schedule remaining posts.",2 Days,YYYY-MM-DD,To Do,LinkedIn/Social Scheduler
+Phase 5: Ongoing Engagement,Content Cadence,5.1,"Plan Next 2 Blog Post Topics","Brainstorm based on pillar themes or current trends.",1 Day,YYYY-MM-DD,To Do,Docs/OneNote
+Phase 5: Ongoing Engagement,LinkedIn Activity,5.2,"Schedule Weekly LinkedIn Engagement Blocks","Time for commenting, sharing, connecting.",Ongoing,N/A,To Do,Calendar

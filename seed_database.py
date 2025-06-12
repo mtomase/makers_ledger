@@ -1,0 +1,252 @@
+# seed_database.py
+
+import datetime
+import bcrypt
+from decimal import Decimal
+from sqlalchemy.orm import Session
+import pathlib
+
+from models import (
+    Base, engine, SessionLocal, User, Ingredient, Supplier, PurchaseOrder, StockAddition,
+    Employee, Product, ProductMaterial, ProductionRun, BatchRecord, IngredientType,
+    StandardProductionTask, StandardShippingTask, GlobalSalary, GlobalCosts,
+    BatchIngredientUsage, ProductProductionTask, Customer, Invoice, InvoiceLineItem, InvoiceStatus,
+    ExpenseCategory, Transaction, TransactionType, TransactionDocument,
+    # --- IMPORT THE ENUM ---
+    UserLayoutEnumDef
+)
+import yaml
+from yaml.loader import SafeLoader
+import os
+
+print("--- Starting Comprehensive Database Seeding Script ---")
+
+# --- Schema Reset ---
+if input("This will delete ALL data from your database. Are you sure? (y/n): ").lower() == 'y':
+    print("Dropping all tables...")
+    Base.metadata.drop_all(bind=engine)
+    print("Creating new tables...")
+    Base.metadata.create_all(bind=engine)
+    print("Schema reset complete.")
+else:
+    print("Operation cancelled.")
+    exit()
+
+db: Session = SessionLocal()
+
+try:
+    print("\n--- Seeding Data ---")
+    
+    # --- 1. User ---
+    print("Seeding User...")
+    try:
+        SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+        CONFIG_FILE_PATH = os.path.join(SCRIPT_DIR, 'config.yaml')
+        with open(CONFIG_FILE_PATH, 'r') as file:
+            config = yaml.load(file, Loader=SafeLoader)
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR: Could not read or parse config.yaml. Error: {e}"); exit()
+
+    users_from_config = config.get('credentials', {}).get('usernames', {})
+    if not users_from_config:
+        print("❌ No users found in config.yaml."); exit()
+
+    first_username = list(users_from_config.keys())[0]
+    main_user = db.query(User).filter(User.username == first_username).first()
+    if not main_user:
+        user_details = users_from_config[first_username]
+        main_user = User(
+            username=first_username, name=user_details['name'], email=user_details['email'],
+            hashed_password=user_details['password'], country_code='IE', 
+            # --- THE FIX: Use the Enum member, not the string ---
+            layout_preference=UserLayoutEnumDef.WIDE 
+        )
+        db.add(main_user); db.commit(); db.refresh(main_user)
+        print(f"  - User '{first_username}' created.")
+    else:
+        # --- THE FIX: Also use the Enum member here for updates ---
+        main_user.country_code = 'IE'; main_user.layout_preference = UserLayoutEnumDef.WIDE; 
+        db.commit(); db.refresh(main_user)
+        print(f"  - User '{first_username}' already exists.")
+
+    # --- 2. Ingredient Types ---
+    print("\nSeeding Ingredient Types...")
+    type_names = ["Oil/Fat/Butter", "Additive", "Lye", "Liquid", "Exfoliant", "Colorant", "Fragrance"]
+    seeded_types = {}
+    for name in type_names:
+        db.add(IngredientType(user_id=main_user.id, name=name))
+    db.commit()
+    for itype in db.query(IngredientType).filter(IngredientType.user_id == main_user.id).all():
+        seeded_types[itype.name] = itype
+    print(f"  > {len(seeded_types)} types seeded.")
+
+    # --- 3. Suppliers ---
+    print("\nSeeding Suppliers...")
+    suppliers_data = [
+        {'name': 'SoapSupplies Co.', 'contact_email': 'sales@soapsupplies.com'},
+        {'name': 'BulkOils Inc.', 'website_url': 'https://bulkoils.com'},
+        {'name': 'ChemDirect', 'phone_number': '555-CHEM-123'},
+        {'name': 'Essential Oils Emporium', 'contact_email': 'aroma@eoe.com'},
+        {'name': 'Packaging Pros', 'website_url': 'https://packpros.com'},
+    ]
+    seeded_suppliers = {}
+    for sup_data in suppliers_data:
+        db.add(Supplier(user_id=main_user.id, **sup_data))
+    db.commit()
+    for sup in db.query(Supplier).filter(Supplier.user_id == main_user.id).all():
+        seeded_suppliers[sup.name] = sup
+    print(f"  > {len(seeded_suppliers)} suppliers seeded.")
+
+    # --- 4. Ingredients ---
+    print("\nSeeding Ingredients...")
+    ingredients_data = [
+        {'name': 'Coconut Oil', 'ingredient_type_id': seeded_types['Oil/Fat/Butter'].id, 'reorder_threshold_grams': 1000},
+        {'name': 'Shea Butter', 'ingredient_type_id': seeded_types['Oil/Fat/Butter'].id, 'reorder_threshold_grams': 500},
+        {'name': 'Sodium Hydroxide (Lye)', 'ingredient_type_id': seeded_types['Lye'].id},
+        {'name': 'Lavender Essential Oil', 'ingredient_type_id': seeded_types['Fragrance'].id},
+        {'name': 'Distilled Water', 'ingredient_type_id': seeded_types['Liquid'].id},
+        {'name': 'Activated Charcoal', 'ingredient_type_id': seeded_types['Additive'].id},
+        {'name': 'Kaolin Clay', 'ingredient_type_id': seeded_types['Additive'].id},
+        {'name': 'Pink Himalayan Salt', 'ingredient_type_id': seeded_types['Exfoliant'].id},
+    ]
+    seeded_ingredients = {}
+    for ing_data in ingredients_data:
+        db.add(Ingredient(user_id=main_user.id, **ing_data))
+    db.commit()
+    for ing in db.query(Ingredient).filter(Ingredient.user_id == main_user.id).all():
+        seeded_ingredients[ing.name] = ing
+    print(f"  > {len(seeded_ingredients)} ingredients seeded.")
+
+    # --- 5. Employees ---
+    print("\nSeeding Employees...")
+    emp_maker = Employee(user_id=main_user.id, name='John Maker', hourly_rate=Decimal('20.00'), role='Soap Maker')
+    emp_packer = Employee(user_id=main_user.id, name='Sarah Packer', hourly_rate=Decimal('16.50'), role='Shipping Clerk')
+    emp_manager = Employee(user_id=main_user.id, name='Admin Alex', hourly_rate=Decimal('0.00'), role='Manager')
+    emp_marketer = Employee(user_id=main_user.id, name='Marketing Mary', hourly_rate=Decimal('0.00'), role='Marketing Manager')
+    db.add_all([emp_maker, emp_packer, emp_manager, emp_marketer]); db.commit()
+    print("  > 4 employees seeded.")
+
+    # --- 6. Global Costs & Salaries ---
+    print("\nSeeding Global Costs & Salaries...")
+    db.add(GlobalSalary(user_id=main_user.id, employee_id=emp_manager.id, monthly_amount=Decimal('4000.00')))
+    db.add(GlobalSalary(user_id=main_user.id, employee_id=emp_marketer.id, monthly_amount=Decimal('3500.00')))
+    db.add(GlobalCosts(user_id=main_user.id, monthly_rent=Decimal('1200.00'), monthly_utilities=Decimal('350.00')))
+    db.commit()
+    print("  > Global costs and 2 global salaries seeded.")
+
+    # --- 7. Standard Tasks ---
+    print("\nSeeding Standard Tasks...")
+    prod_tasks = ["Weigh Oils", "Mix Lye Solution", "Blend & Pour", "Cut Soap", "Cure Bars"]
+    ship_tasks = ["Print Shipping Label", "Package Items", "Schedule Pickup"]
+    for task_name in prod_tasks: db.add(StandardProductionTask(user_id=main_user.id, task_name=task_name))
+    for task_name in ship_tasks: db.add(StandardShippingTask(user_id=main_user.id, task_name=task_name))
+    db.commit()
+    print(f"  > {len(prod_tasks)} production and {len(ship_tasks)} shipping tasks seeded.")
+
+    # --- 8. Purchase Orders and Stock Additions ---
+    print("\nSeeding Purchases and Stock Lots...")
+    po1 = PurchaseOrder(user_id=main_user.id, supplier_id=seeded_suppliers['SoapSupplies Co.'].id, order_date=datetime.date(2024, 5, 10), shipping_cost=Decimal('25.00'))
+    po2 = PurchaseOrder(user_id=main_user.id, supplier_id=seeded_suppliers['ChemDirect'].id, order_date=datetime.date(2024, 5, 20), shipping_cost=Decimal('7.50'))
+    po3 = PurchaseOrder(user_id=main_user.id, supplier_id=seeded_suppliers['Essential Oils Emporium'].id, order_date=datetime.date(2024, 6, 1), shipping_cost=Decimal('12.00'))
+    po4 = PurchaseOrder(user_id=main_user.id, supplier_id=seeded_suppliers['BulkOils Inc.'].id, order_date=datetime.date(2024, 6, 5), shipping_cost=Decimal('30.00'))
+    db.add_all([po1, po2, po3, po4]); db.flush()
+    
+    s1 = StockAddition(purchase_order_id=po1.id, ingredient_id=seeded_ingredients['Coconut Oil'].id, quantity_added_grams=5000, quantity_remaining_grams=5000, item_cost=40, vat_amount=9.2, supplier_lot_number='SSC-CO-01')
+    s2 = StockAddition(purchase_order_id=po1.id, ingredient_id=seeded_ingredients['Shea Butter'].id, quantity_added_grams=2000, quantity_remaining_grams=2000, item_cost=55, vat_amount=12.65, supplier_lot_number='SSC-SB-01')
+    s3 = StockAddition(purchase_order_id=po2.id, ingredient_id=seeded_ingredients['Sodium Hydroxide (Lye)'].id, quantity_added_grams=1000, quantity_remaining_grams=1000, item_cost=15, vat_amount=3.45, supplier_lot_number='CD-SH-01')
+    s4 = StockAddition(purchase_order_id=po3.id, ingredient_id=seeded_ingredients['Lavender Essential Oil'].id, quantity_added_grams=500, quantity_remaining_grams=500, item_cost=80, vat_amount=18.4, supplier_lot_number='EOE-LAV-01')
+    s5 = StockAddition(purchase_order_id=po4.id, ingredient_id=seeded_ingredients['Kaolin Clay'].id, quantity_added_grams=1000, quantity_remaining_grams=1000, item_cost=25, vat_amount=5.75, supplier_lot_number='BO-KC-01')
+    s6 = StockAddition(purchase_order_id=po4.id, ingredient_id=seeded_ingredients['Activated Charcoal'].id, quantity_added_grams=500, quantity_remaining_grams=500, item_cost=30, vat_amount=6.9, supplier_lot_number='BO-AC-01')
+    db.add_all([s1, s2, s3, s4, s5, s6]); db.commit()
+    print(f"  > 4 POs with {db.query(StockAddition).count()} stock lots seeded.")
+
+    # --- 9. Products with Recipes & Workflows ---
+    print("\nSeeding Products, Recipes, and Workflows...")
+    prod1 = Product(user_id=main_user.id, product_name="Lavender Bliss Soap Bar", product_code="LAV-001", retail_price_per_item=8.50)
+    prod2 = Product(user_id=main_user.id, product_name="Charcoal Detox Bar", product_code="CHA-001", retail_price_per_item=9.00)
+    prod3 = Product(user_id=main_user.id, product_name="Himalayan Salt Scrub", product_code="SAL-001", retail_price_per_item=12.50)
+    db.add_all([prod1, prod2, prod3]); db.commit()
+    # Recipes
+    db.add_all([
+        ProductMaterial(product_id=prod1.id, ingredient_id=seeded_ingredients['Coconut Oil'].id, quantity_grams=40),
+        ProductMaterial(product_id=prod1.id, ingredient_id=seeded_ingredients['Shea Butter'].id, quantity_grams=30),
+        ProductMaterial(product_id=prod1.id, ingredient_id=seeded_ingredients['Sodium Hydroxide (Lye)'].id, quantity_grams=12),
+        ProductMaterial(product_id=prod1.id, ingredient_id=seeded_ingredients['Lavender Essential Oil'].id, quantity_grams=5),
+        ProductMaterial(product_id=prod2.id, ingredient_id=seeded_ingredients['Coconut Oil'].id, quantity_grams=50),
+        ProductMaterial(product_id=prod2.id, ingredient_id=seeded_ingredients['Sodium Hydroxide (Lye)'].id, quantity_grams=15),
+        ProductMaterial(product_id=prod2.id, ingredient_id=seeded_ingredients['Activated Charcoal'].id, quantity_grams=10),
+    ]); db.commit()
+    print(f"  > 3 products with recipes seeded.")
+
+    # --- 10. Production Runs & Batches ---
+    print("\nSeeding Production Runs and Batches...")
+    run1 = ProductionRun(user_id=main_user.id, product_id=prod1.id, planned_batch_count=1, notes="Initial test run")
+    run2 = ProductionRun(user_id=main_user.id, product_id=prod2.id, planned_batch_count=2, notes="First full run of charcoal soap")
+    db.add_all([run1, run2]); db.flush()
+    b1 = BatchRecord(production_run_id=run1.id, user_id=main_user.id, batch_code="LAV-001-240610-01", person_responsible_id=emp_maker.id, manufacturing_date=datetime.date.today(), bars_in_batch=12)
+    b2 = BatchRecord(production_run_id=run2.id, user_id=main_user.id, batch_code="CHA-001-240611-01", person_responsible_id=emp_maker.id, manufacturing_date=datetime.date.today(), bars_in_batch=12)
+    b3 = BatchRecord(production_run_id=run2.id, user_id=main_user.id, batch_code="CHA-001-240611-02", person_responsible_id=emp_maker.id, manufacturing_date=datetime.date.today(), bars_in_batch=12)
+    db.add_all([b1, b2, b3]); db.flush()
+    # Traceability
+    db.add_all([
+        BatchIngredientUsage(batch_record_id=b1.id, stock_addition_id=s1.id, ingredient_id=s1.ingredient_id, quantity_used_grams=40),
+        BatchIngredientUsage(batch_record_id=b1.id, stock_addition_id=s2.id, ingredient_id=s2.ingredient_id, quantity_used_grams=30),
+        BatchIngredientUsage(batch_record_id=b2.id, stock_addition_id=s1.id, ingredient_id=s1.ingredient_id, quantity_used_grams=50),
+        BatchIngredientUsage(batch_record_id=b2.id, stock_addition_id=s6.id, ingredient_id=s6.ingredient_id, quantity_used_grams=10),
+    ]); db.commit()
+    print(f"  > 2 runs with 3 batches and traceability seeded.")
+
+    # --- 11. Customers & Invoices ---
+    print("\nSeeding Customers and Invoices...")
+    c1 = Customer(user_id=main_user.id, name='The Corner Cafe', vat_number='IE1234567T')
+    c2 = Customer(user_id=main_user.id, name='Boutique Blooms', address='123 Floral Lane, Dublin')
+    c3 = Customer(user_id=main_user.id, name='The Health Hub', contact_email='orders@healthhub.ie')
+    c4 = Customer(user_id=main_user.id, name='Gifts & More')
+    c5 = Customer(user_id=main_user.id, name='Jane Doe (Online)', address='45 Online Avenue')
+    db.add_all([c1, c2, c3, c4, c5]); db.commit()
+    
+    inv1 = Invoice(user_id=main_user.id, customer_id=c1.id, invoice_number="INV-0001", invoice_date=datetime.date.today() - datetime.timedelta(days=30), status=InvoiceStatus.PAID)
+    inv2 = Invoice(user_id=main_user.id, customer_id=c2.id, invoice_number="INV-0002", invoice_date=datetime.date.today() - datetime.timedelta(days=10), status=InvoiceStatus.SENT)
+    inv3 = Invoice(user_id=main_user.id, customer_id=c3.id, invoice_number="INV-0003", invoice_date=datetime.date.today(), status=InvoiceStatus.DRAFT)
+    inv4 = Invoice(user_id=main_user.id, customer_id=c5.id, invoice_number="INV-0004", invoice_date=datetime.date.today() - datetime.timedelta(days=5), status=InvoiceStatus.PAID)
+    db.add_all([inv1, inv2, inv3, inv4]); db.flush()
+    db.add(InvoiceLineItem(invoice_id=inv1.id, product_id=prod1.id, quantity=20, unit_price=4.25, line_total=85, description=prod1.product_name))
+    db.add(InvoiceLineItem(invoice_id=inv2.id, product_id=prod2.id, quantity=15, unit_price=4.50, line_total=67.5, description=prod2.product_name))
+    db.add(InvoiceLineItem(invoice_id=inv3.id, product_id=prod1.id, quantity=10, unit_price=4.25, line_total=42.5, description=prod1.product_name))
+    db.add(InvoiceLineItem(invoice_id=inv4.id, product_id=prod2.id, quantity=2, unit_price=9.00, line_total=18.00, description=prod2.product_name))
+    db.commit()
+    print(f"  > 5 customers and 4 invoices seeded.")
+
+    # --- 12. Expense Categories & Transactions ---
+    print("\nSeeding Expense Categories and Transactions...")
+    exp_cat_names = ['Materials', 'Stationary', 'Phones', 'Advertising', 'Light & Heat', 'Rent & Rates', 'Misc', 'Capital']
+    seeded_exp_cats = {}
+    for name in exp_cat_names: db.add(ExpenseCategory(user_id=main_user.id, name=name))
+    db.commit()
+    for cat in db.query(ExpenseCategory).filter(ExpenseCategory.user_id == main_user.id).all():
+        seeded_exp_cats[cat.name] = cat
+    
+    t1 = Transaction(user_id=main_user.id, date=inv1.invoice_date, description=f"Payment for {inv1.invoice_number}", amount=inv1.total_amount, transaction_type=TransactionType.SALE, customer_id=c1.id)
+    t2 = Transaction(user_id=main_user.id, date=po1.order_date, description=f"Payment to {seeded_suppliers['SoapSupplies Co.'].name}", amount=100, transaction_type=TransactionType.EXPENSE, category_id=seeded_exp_cats['Materials'].id, supplier_id=po1.supplier_id)
+    t3 = Transaction(user_id=main_user.id, date=datetime.date.today() - datetime.timedelta(days=10), description="Owner Drawings", amount=500, transaction_type=TransactionType.DRAWING)
+    t4 = Transaction(user_id=main_user.id, date=datetime.date.today() - datetime.timedelta(days=5), description="Phone Bill", amount=60, transaction_type=TransactionType.EXPENSE, category_id=seeded_exp_cats['Phones'].id)
+    t5_with_doc = Transaction(user_id=main_user.id, date=datetime.date.today() - datetime.timedelta(days=3), description="Facebook Ads", amount=150, transaction_type=TransactionType.EXPENSE, category_id=seeded_exp_cats['Advertising'].id)
+    db.add_all([t1, t2, t3, t4, t5_with_doc]); db.flush()
+
+    # --- Seed a transaction document ---
+    save_dir = pathlib.Path(f"uploaded_files/transactions/{main_user.id}/{t5_with_doc.id}")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    file_path = save_dir / "sample_receipt.txt"
+    with open(file_path, "w") as f:
+        f.write(f"This is a sample receipt for transaction ID {t5_with_doc.id}.\n")
+        f.write(f"Amount: {t5_with_doc.amount}\nDate: {t5_with_doc.date}")
+    
+    doc = TransactionDocument(transaction_id=t5_with_doc.id, file_path=str(file_path), original_filename="sample_receipt.txt")
+    db.add(doc); db.commit()
+    print(f"  > 5 transactions seeded, with one sample document attached.")
+
+    print("\n--- Seeding Complete! ---")
+
+finally:
+    db.close()
+    print("Database session closed.")

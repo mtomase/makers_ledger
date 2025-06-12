@@ -9,6 +9,7 @@ streamlit_js_eval
 streamlit-authenticator>=0.3.0
 passlib
 bcrypt
+werkzeug
 
 # Database & ORM
 sqlalchemy
@@ -20,3 +21,4 @@ pandas
 numpy
 PyYAML
 python-dotenv
+openpyxl
