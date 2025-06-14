@@ -7,22 +7,16 @@ import os
 
 # --- Boilerplate: Add project root to path ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-# --- FIX: Import the correct Enum name 'UserLayoutEnumDef' from your models.py ---
 from models import User, SessionLocal, UserLayoutEnumDef
 
 # --- A simple list of countries for the dropdown ---
 COUNTRY_CODES = {
     "Ireland": "IE", "United Kingdom": "GB", "United States": "US", 
     "Canada": "CA", "Australia": "AU", "Germany": "DE", "France": "FR",
-    # Add more countries as needed
 }
 COUNTRY_NAMES = list(COUNTRY_CODES.keys())
 
 def render(db: Session, user: User, authenticator, config, config_path, **kwargs):
-    """
-    This is the function that main_app.py calls to render this page.
-    It receives the authenticator instance and config directly from main_app.
-    """
     st.header("⚙️ User Settings")
     st.write("Manage your user profile and application settings.")
     
@@ -39,10 +33,21 @@ def render(db: Session, user: User, authenticator, config, config_path, **kwargs
         country = st.selectbox("Country (for tax localization)", options=COUNTRY_NAMES, index=country_index)
 
         st.markdown("#### Page Layout Preference")
-        # Use the .value of the enum to match the string from the radio button options
         current_layout_value = user.layout_preference.value if user.layout_preference else 'wide'
         layout_index = 0 if current_layout_value == 'wide' else 1
         layout = st.radio("Layout", ["wide", "centered"], index=layout_index, horizontal=True)
+
+        # --- NEW WIDGET FOR BACKUP SETTINGS ---
+        st.markdown("---")
+        st.markdown("#### Backup Settings")
+        backup_days = st.number_input(
+            "Cloud Backup Retention (Days)",
+            min_value=1,
+            max_value=365,
+            value=user.backup_retention_days or 7,
+            step=1,
+            help="How many days of daily backups to keep in your OneDrive. Older backups will be deleted automatically."
+        )
 
         if st.form_submit_button("💾 Save User Details", type="primary"):
             if not new_name.strip() or not new_email.strip():
@@ -55,8 +60,9 @@ def render(db: Session, user: User, authenticator, config, config_path, **kwargs
                         user_to_update.name = new_name.strip()
                         user_to_update.email = new_email.strip()
                         user_to_update.country_code = COUNTRY_CODES[country]
-                        # --- FIX: Convert the string 'wide'/'centered' to the correct ENUM member ---
                         user_to_update.layout_preference = UserLayoutEnumDef(layout)
+                        # --- SAVE THE NEW BACKUP SETTING ---
+                        user_to_update.backup_retention_days = backup_days
                         
                         config['credentials']['usernames'][user.username]['name'] = user_to_update.name
                         config['credentials']['usernames'][user.username]['email'] = user_to_update.email

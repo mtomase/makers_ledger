@@ -10,6 +10,9 @@ streamlit-authenticator>=0.3.0
 passlib
 bcrypt
 werkzeug
+webrowser
+msal
+requests
 
 # Database & ORM
 sqlalchemy

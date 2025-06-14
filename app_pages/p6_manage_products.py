@@ -17,6 +17,7 @@ from models import (
 
 # --- REBUILT Cost Calculation Logic (from old app) ---
 def calculate_full_costs(product_id: int, db: Session, user_id: int):
+    # Assuming Product model has 'shipping_tasks' relationship. If not, this line can be removed.
     product = db.query(Product).options(
         selectinload(Product.materials).joinedload(ProductMaterial.ingredient_ref),
         selectinload(Product.production_tasks).joinedload(ProductProductionTask.standard_task_ref),
@@ -174,35 +175,54 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
     with tab1:
         st.subheader("Product Recipe / Bill of Materials")
         all_ingredients = db.query(Ingredient).filter(Ingredient.user_id == user.id).order_by(Ingredient.name).all()
-        if not all_ingredients:
-            st.warning("No ingredients found. Please add ingredients first on the 'Manage Ingredients' page.")
-        else:
+        
+        # --- ROBUST FIX: Check for prerequisites ---
+        prerequisites_met_recipe = bool(all_ingredients)
+        
+        if not prerequisites_met_recipe:
+            st.warning("No ingredients found. Please add ingredients first on the 'Manage Ingredients' page to create a recipe.")
+
+        # --- ROBUST FIX: Always create the DataFrame with the correct columns ---
+        df_recipe_columns = {
+            "ID": [], "Ingredient": [], "Quantity (g)": []
+        }
+        
+        recipe_data = []
+        if product.materials:
             recipe_data = [{"ID": m.id, "Ingredient": m.ingredient_ref.name, "Quantity (g)": m.quantity_grams} for m in product.materials]
-            edited_recipe_df = st.data_editor(
-                pd.DataFrame(recipe_data), num_rows="dynamic", key="recipe_editor",
-                column_config={
-                    "ID": None,
-                    # BUG FIX: Corrected 'Trie' to 'True'
-                    "Ingredient": st.column_config.SelectboxColumn("Ingredient*", options=[ing.name for ing in all_ingredients], required=True),
-                    "Quantity (g)": st.column_config.NumberColumn("Quantity (g)*", required=True, min_value=0.0, format="%.3f")
-                }, use_container_width=True, hide_index=True
-            )
-            if st.button("💾 Save Recipe Changes", type="primary"):
-                with SessionLocal() as transaction_db:
-                    try:
-                        transaction_db.query(ProductMaterial).filter(ProductMaterial.product_id == product.id).delete(synchronize_session=False)
-                        ing_map = {ing.name: ing.id for ing in all_ingredients}
-                        for _, row in edited_recipe_df.iterrows():
-                            ing_name, quantity = row["Ingredient"], row["Quantity (g)"]
-                            if not ing_name or pd.isna(quantity): continue
-                            ing_id = ing_map.get(ing_name)
-                            if ing_id:
-                                transaction_db.add(ProductMaterial(product_id=product.id, ingredient_id=ing_id, quantity_grams=Decimal(str(quantity))))
-                        transaction_db.commit()
-                        st.success("Recipe updated successfully!")
-                    except Exception as e:
-                        transaction_db.rollback(); st.error(f"Error saving recipe: {e}")
-                st.rerun()
+        
+        df_recipe = pd.DataFrame(recipe_data if recipe_data else df_recipe_columns)
+
+        edited_recipe_df = st.data_editor(
+            df_recipe, 
+            num_rows="dynamic", 
+            key="recipe_editor",
+            disabled=not prerequisites_met_recipe,
+            column_config={
+                "ID": None,
+                "Ingredient": st.column_config.SelectboxColumn("Ingredient*", options=[ing.name for ing in all_ingredients], required=True),
+                "Quantity (g)": st.column_config.NumberColumn("Quantity (g)*", required=True, min_value=0.0, format="%.3f")
+            }, 
+            use_container_width=True, 
+            hide_index=True
+        )
+        
+        if st.button("💾 Save Recipe Changes", type="primary", disabled=not prerequisites_met_recipe):
+            with SessionLocal() as transaction_db:
+                try:
+                    transaction_db.query(ProductMaterial).filter(ProductMaterial.product_id == product.id).delete(synchronize_session=False)
+                    ing_map = {ing.name: ing.id for ing in all_ingredients}
+                    for _, row in edited_recipe_df.iterrows():
+                        ing_name, quantity = row["Ingredient"], row["Quantity (g)"]
+                        if not ing_name or pd.isna(quantity) or quantity <= 0: continue
+                        ing_id = ing_map.get(ing_name)
+                        if ing_id:
+                            transaction_db.add(ProductMaterial(product_id=product.id, ingredient_id=ing_id, quantity_grams=Decimal(str(quantity))))
+                    transaction_db.commit()
+                    st.success("Recipe updated successfully!")
+                except Exception as e:
+                    transaction_db.rollback(); st.error(f"Error saving recipe: {e}")
+            st.rerun()
 
     with tab2:
         st.subheader("Production Tasks & Labor")
@@ -212,17 +232,15 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
         task_names = [t.task_name for t in all_tasks]
         employee_names = [e.name for e in all_employees]
         
-        prerequisites_met = bool(task_names and employee_names)
+        prerequisites_met_workflow = bool(task_names and employee_names)
 
-        if not prerequisites_met:
+        if not prerequisites_met_workflow:
             if not task_names:
                 st.warning("You must define at least one 'Standard Production Task' before building a workflow. Please go to the 'Settings' page to add tasks.")
             if not employee_names:
                 st.warning("You must add at least one 'Employee' before assigning tasks. Please go to the 'Settings' page to add employees.")
         
-        # --- ROBUST FIX: Always create the DataFrame with the correct columns ---
-        # This ensures the data editor initializes correctly even with zero rows.
-        df_columns = {
+        df_workflow_columns = {
             "ID": [], "Task": [], "Assigned To": [], "Time (minutes)": []
         }
         
@@ -233,13 +251,13 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
                 for pt in product.production_tasks if pt.standard_task_ref and pt.employee_ref
             ]
         
-        df = pd.DataFrame(workflow_data if workflow_data else df_columns)
+        df_workflow = pd.DataFrame(workflow_data if workflow_data else df_workflow_columns)
 
         edited_workflow_df = st.data_editor(
-            df, 
+            df_workflow, 
             num_rows="dynamic", 
             key="workflow_editor",
-            disabled=not prerequisites_met,
+            disabled=not prerequisites_met_workflow,
             column_config={
                 "ID": None,
                 "Task": st.column_config.SelectboxColumn("Task*", options=task_names, required=True),
@@ -250,7 +268,7 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
             hide_index=True
         )
         
-        if st.button("💾 Save Workflow Changes", type="primary", disabled=not prerequisites_met):
+        if st.button("💾 Save Workflow Changes", type="primary", disabled=not prerequisites_met_workflow):
             with SessionLocal() as transaction_db:
                 try:
                     transaction_db.query(ProductProductionTask).filter(ProductProductionTask.product_id == product.id).delete(synchronize_session=False)
@@ -394,7 +412,6 @@ def render(db: Session, user: User, is_mobile: bool):
     if selected_product_name == CREATE_NEW_OPTION:
         render_new_product_form(user)
     elif selected_product_name:
-        # BUG FIX: Corrected query from User.id to Product.user_id
         product = db.query(Product).options(
             selectinload(Product.materials).joinedload(ProductMaterial.ingredient_ref),
             selectinload(Product.production_tasks).joinedload(ProductProductionTask.standard_task_ref),

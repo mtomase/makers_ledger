@@ -8,7 +8,8 @@ import datetime
 from streamlit_js_eval import streamlit_js_eval
 
 # --- Model and Utility Imports ---
-from models import get_db, User, SessionLocal
+# FIX: Import UserLayoutEnumDef to correctly handle new user creation
+from models import get_db, User, SessionLocal, UserLayoutEnumDef
 
 # --- Page Imports ---
 from app_pages import (
@@ -94,8 +95,6 @@ def main():
             if not current_user:
                 st.error(f"User '{username}' found in authenticator but not in the database. Please contact support.")
                 st.stop()
-
-            # --- REMOVED: The incorrect call to set_page_layout was here ---
 
             with st.sidebar:
                 st.success(f"Welcome, **{current_user.name}**!")
@@ -186,7 +185,10 @@ def main():
     elif st.session_state["authentication_status"] is None:
         st.warning("Please enter your username and password to login, or register if you are a new user.")
         try:
-            email_of_registered_user, username_of_registered_user, name_of_registered_user = authenticator.register_user(pre_authorized=False)
+            # --- FIX: Pass the list of preauthorized emails from the config file ---
+            email_of_registered_user, username_of_registered_user, name_of_registered_user = authenticator.register_user(
+                pre_authorized=config_auth['preauthorized']['emails']
+            )
             if email_of_registered_user:
                 st.success('User registered successfully in authenticator. Adding to application database...')
                 db = next(get_db())
@@ -198,7 +200,8 @@ def main():
                         name=name_of_registered_user, 
                         hashed_password=hashed_password,
                         country_code='IE',
-                        layout_preference='wide'
+                        # --- FIX: Use the Enum member, not a string, for the default layout ---
+                        layout_preference=UserLayoutEnumDef.WIDE
                     )
                     db.add(db_user)
                     db.commit()

@@ -80,6 +80,12 @@ def render_delete_dialog(db: Session):
         if c1.button("Yes, Delete Permanently", type="primary", use_container_width=True, key="confirm_delete"):
             with SessionLocal() as t_db:
                 t_to_delete = t_db.query(Transaction).filter(Transaction.id == transaction_id).one()
+                # Manually delete files before DB cascade
+                for doc in t_to_delete.documents:
+                    try:
+                        os.remove(doc.file_path)
+                    except FileNotFoundError:
+                        pass # File already gone, ignore
                 t_db.delete(t_to_delete)
                 t_db.commit()
                 st.success("Transaction deleted!")
@@ -108,26 +114,37 @@ def render_form_view(db: Session, user: User):
     else:
         st.subheader("Add New Transaction")
 
-    # --- NEW: Display existing documents OUTSIDE and BEFORE the form ---
+    # --- MODIFIED: Display existing documents with a delete button for each ---
     if is_edit_mode and transaction and transaction.documents:
         with st.container(border=True):
             st.markdown("#### Current Attachments")
-            doc_cols = st.columns(4)
-            col_idx = 0
-            for doc in transaction.documents:
+            for doc in list(transaction.documents): # Iterate over a copy
+                c1, c2 = st.columns([5, 1])
                 try:
                     with open(doc.file_path, "rb") as file_data:
-                        doc_cols[col_idx % 4].download_button(
+                        c1.download_button(
                             label=f"📄 {doc.original_filename}",
                             data=file_data,
                             file_name=doc.original_filename,
-                            key=f"form_doc_{doc.id}",
+                            key=f"form_txn_doc_{doc.id}",
                             use_container_width=True
                         )
-                    col_idx += 1
                 except FileNotFoundError:
-                    doc_cols[col_idx % 4].error(f"Missing: {doc.original_filename}")
-                    col_idx += 1
+                    c1.error(f"Missing: {doc.original_filename}")
+
+                if c2.button("🗑️", key=f"delete_txn_doc_{doc.id}", help="Delete this attachment"):
+                    try:
+                        os.remove(doc.file_path)
+                    except FileNotFoundError:
+                        st.toast(f"File was already deleted from disk.", icon="⚠️")
+
+                    with SessionLocal() as t_db:
+                        doc_to_delete = t_db.query(TransactionDocument).filter(TransactionDocument.id == doc.id).one_or_none()
+                        if doc_to_delete:
+                            t_db.delete(doc_to_delete)
+                            t_db.commit()
+                    st.success(f"Deleted attachment: {doc.original_filename}")
+                    st.rerun()
         st.markdown("---")
 
     categories = db.query(ExpenseCategory).filter(ExpenseCategory.user_id == user.id).order_by(ExpenseCategory.name).all()
@@ -161,7 +178,6 @@ def render_form_view(db: Session, user: User):
             cust_id_index = cust_id_options.index(transaction.customer_id) if transaction and transaction.customer_id in cust_id_options else 0
             customer_id = st.selectbox("Customer (Optional)", options=cust_id_options, format_func=lambda x: cust_options[x], index=cust_id_index)
         
-        # --- File uploader for NEW files remains inside the form ---
         uploaded_files = st.file_uploader("Upload New Documents", accept_multiple_files=True)
         
         st.markdown("---")

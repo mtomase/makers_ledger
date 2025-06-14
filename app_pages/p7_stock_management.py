@@ -97,6 +97,12 @@ def render_purchase_edit_form(db: Session, user: User):
                 try:
                     with SessionLocal() as t_db:
                         po_to_delete = t_db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id).one()
+                        # Manually delete files before DB cascade
+                        for doc in po_to_delete.documents:
+                            try:
+                                os.remove(doc.file_path)
+                            except FileNotFoundError:
+                                pass # File already gone, ignore
                         t_db.delete(po_to_delete); t_db.commit()
                     st.warning(f"Purchase Order #{po_id} has been deleted.")
                     st.session_state.show_delete_confirm_po = False
@@ -115,26 +121,37 @@ def render_purchase_edit_form(db: Session, user: User):
 
     st.subheader(f"Edit Purchase Order #{po.id}")
 
-    # --- NEW: Display existing documents OUTSIDE and BEFORE the form ---
+    # --- MODIFIED: Display existing documents with a delete button for each ---
     if po.documents:
         with st.container(border=True):
             st.markdown("#### Current Attachments")
-            doc_cols = st.columns(4)
-            col_idx = 0
-            for doc in po.documents:
+            for doc in list(po.documents): # Iterate over a copy
+                c1, c2 = st.columns([5, 1])
                 try:
                     with open(doc.file_path, "rb") as file_data:
-                        doc_cols[col_idx % 4].download_button(
+                        c1.download_button(
                             label=f"📄 {doc.original_filename}",
                             data=file_data,
                             file_name=doc.original_filename,
                             key=f"form_po_doc_{doc.id}",
                             use_container_width=True
                         )
-                    col_idx += 1
                 except FileNotFoundError:
-                    doc_cols[col_idx % 4].error(f"Missing: {doc.original_filename}")
-                    col_idx += 1
+                    c1.error(f"Missing: {doc.original_filename}")
+
+                if c2.button("🗑️", key=f"delete_po_doc_{doc.id}", help="Delete this attachment"):
+                    try:
+                        os.remove(doc.file_path)
+                    except FileNotFoundError:
+                        st.toast(f"File was already deleted from disk.", icon="⚠️")
+                    
+                    with SessionLocal() as t_db:
+                        doc_to_delete = t_db.query(PurchaseDocument).filter(PurchaseDocument.id == doc.id).one_or_none()
+                        if doc_to_delete:
+                            t_db.delete(doc_to_delete)
+                            t_db.commit()
+                    st.success(f"Deleted attachment: {doc.original_filename}")
+                    st.rerun()
         st.markdown("---")
 
     ingredients = db.query(Ingredient).filter(Ingredient.user_id == user.id).order_by(Ingredient.name).all()
@@ -156,7 +173,6 @@ def render_purchase_edit_form(db: Session, user: User):
         line_items_data = [{"Ingredient": item.ingredient_ref.name, "Quantity (g)": float(item.quantity_added_grams), "Item Cost (€)": float(item.item_cost), "Supplier Lot #": item.supplier_lot_number or ""} for item in po.line_items]
         edited_line_items = st.data_editor(pd.DataFrame(line_items_data), num_rows="dynamic", use_container_width=True, hide_index=True, column_config={"Ingredient": st.column_config.SelectboxColumn("Ingredient*", options=ing_options, required=True), "Quantity (g)": st.column_config.NumberColumn("Quantity (g)*", min_value=0.01, required=True, format="%.2f"), "Item Cost (€)": st.column_config.NumberColumn("Item Cost (€)*", min_value=0.0, required=True, format="%.2f"), "Supplier Lot #": st.column_config.TextColumn("Supplier Lot #")})
         
-        # --- File uploader for NEW files remains inside the form ---
         uploaded_files = st.file_uploader("Upload New Documents", accept_multiple_files=True, key=f"po_uploader_{po.id}")
 
         st.markdown("---")
@@ -186,7 +202,7 @@ def render_purchase_edit_form(db: Session, user: User):
     if c1.button("✖️ Cancel", use_container_width=True, key="cancel_po_edit"):
         st.session_state.show_cancel_confirm_po = True
         st.rerun()
-    if c2.button("🗑️ Delete", use_container_width=True, key="delete_po_edit"):
+    if c2.button("🗑️ Delete PO", use_container_width=True, key="delete_po_edit"):
         st.session_state.show_delete_confirm_po = True
         st.rerun()
 

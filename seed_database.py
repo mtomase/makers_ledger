@@ -12,7 +12,6 @@ from models import (
     StandardProductionTask, StandardShippingTask, GlobalSalary, GlobalCosts,
     BatchIngredientUsage, ProductProductionTask, Customer, Invoice, InvoiceLineItem, InvoiceStatus,
     ExpenseCategory, Transaction, TransactionType, TransactionDocument,
-    # --- IMPORT THE ENUM ---
     UserLayoutEnumDef
 )
 import yaml
@@ -38,7 +37,7 @@ try:
     print("\n--- Seeding Data ---")
     
     # --- 1. User ---
-    print("Seeding User...")
+    print("Seeding All Users from config.yaml...")
     try:
         SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
         CONFIG_FILE_PATH = os.path.join(SCRIPT_DIR, 'config.yaml')
@@ -51,26 +50,57 @@ try:
     if not users_from_config:
         print("❌ No users found in config.yaml."); exit()
 
-    first_username = list(users_from_config.keys())[0]
-    main_user = db.query(User).filter(User.username == first_username).first()
-    if not main_user:
-        user_details = users_from_config[first_username]
-        main_user = User(
-            username=first_username, name=user_details['name'], email=user_details['email'],
-            hashed_password=user_details['password'], country_code='IE', 
-            # --- THE FIX: Use the Enum member, not the string ---
-            layout_preference=UserLayoutEnumDef.WIDE 
-        )
-        db.add(main_user); db.commit(); db.refresh(main_user)
-        print(f"  - User '{first_username}' created.")
-    else:
-        # --- THE FIX: Also use the Enum member here for updates ---
-        main_user.country_code = 'IE'; main_user.layout_preference = UserLayoutEnumDef.WIDE; 
-        db.commit(); db.refresh(main_user)
-        print(f"  - User '{first_username}' already exists.")
+    main_user_for_data = None 
+
+    for username, user_details in users_from_config.items():
+        user = db.query(User).filter(User.username == username).first()
+        
+        full_name = user_details.get('name')
+        if not full_name:
+            first = user_details.get('first_name', '')
+            last = user_details.get('last_name', '')
+            full_name = f"{first} {last}".strip()
+        if not full_name:
+            full_name = username
+
+        if not user:
+            new_user = User(
+                username=username, 
+                name=full_name,
+                email=user_details['email'],
+                hashed_password=user_details['password'], 
+                country_code='IE', 
+                layout_preference=UserLayoutEnumDef.WIDE,
+                backup_retention_days=7 
+            )
+            db.add(new_user)
+            db.commit()
+            db.refresh(new_user)
+            print(f"  - User '{username}' created.")
+            user = new_user
+        else:
+            user.name = full_name
+            user.email = user_details['email']
+            user.hashed_password = user_details['password']
+            if not hasattr(user, 'backup_retention_days') or user.backup_retention_days is None:
+                 user.backup_retention_days = 7
+            db.commit()
+            print(f"  - User '{username}' already exists and has been updated.")
+
+        if main_user_for_data is None:
+            main_user_for_data = user
+    
+    if main_user_for_data is None:
+        print("❌ CRITICAL ERROR: No users were processed. Cannot seed sample data.")
+        exit()
+
+    main_user = main_user_for_data
+    print(f"\n--- All subsequent sample data will be associated with user: '{main_user.username}' ---")
 
     # --- 2. Ingredient Types ---
     print("\nSeeding Ingredient Types...")
+    db.query(IngredientType).filter(IngredientType.user_id == main_user.id).delete()
+    db.commit()
     type_names = ["Oil/Fat/Butter", "Additive", "Lye", "Liquid", "Exfoliant", "Colorant", "Fragrance"]
     seeded_types = {}
     for name in type_names:
@@ -82,6 +112,8 @@ try:
 
     # --- 3. Suppliers ---
     print("\nSeeding Suppliers...")
+    db.query(Supplier).filter(Supplier.user_id == main_user.id).delete()
+    db.commit()
     suppliers_data = [
         {'name': 'SoapSupplies Co.', 'contact_email': 'sales@soapsupplies.com'},
         {'name': 'BulkOils Inc.', 'website_url': 'https://bulkoils.com'},
@@ -99,6 +131,8 @@ try:
 
     # --- 4. Ingredients ---
     print("\nSeeding Ingredients...")
+    db.query(Ingredient).filter(Ingredient.user_id == main_user.id).delete()
+    db.commit()
     ingredients_data = [
         {'name': 'Coconut Oil', 'ingredient_type_id': seeded_types['Oil/Fat/Butter'].id, 'reorder_threshold_grams': 1000},
         {'name': 'Shea Butter', 'ingredient_type_id': seeded_types['Oil/Fat/Butter'].id, 'reorder_threshold_grams': 500},
@@ -119,6 +153,8 @@ try:
 
     # --- 5. Employees ---
     print("\nSeeding Employees...")
+    db.query(Employee).filter(Employee.user_id == main_user.id).delete()
+    db.commit()
     emp_maker = Employee(user_id=main_user.id, name='John Maker', hourly_rate=Decimal('20.00'), role='Soap Maker')
     emp_packer = Employee(user_id=main_user.id, name='Sarah Packer', hourly_rate=Decimal('16.50'), role='Shipping Clerk')
     emp_manager = Employee(user_id=main_user.id, name='Admin Alex', hourly_rate=Decimal('0.00'), role='Manager')
@@ -128,6 +164,9 @@ try:
 
     # --- 6. Global Costs & Salaries ---
     print("\nSeeding Global Costs & Salaries...")
+    db.query(GlobalSalary).filter(GlobalSalary.user_id == main_user.id).delete()
+    db.query(GlobalCosts).filter(GlobalCosts.user_id == main_user.id).delete()
+    db.commit()
     db.add(GlobalSalary(user_id=main_user.id, employee_id=emp_manager.id, monthly_amount=Decimal('4000.00')))
     db.add(GlobalSalary(user_id=main_user.id, employee_id=emp_marketer.id, monthly_amount=Decimal('3500.00')))
     db.add(GlobalCosts(user_id=main_user.id, monthly_rent=Decimal('1200.00'), monthly_utilities=Decimal('350.00')))
@@ -136,6 +175,9 @@ try:
 
     # --- 7. Standard Tasks ---
     print("\nSeeding Standard Tasks...")
+    db.query(StandardProductionTask).filter(StandardProductionTask.user_id == main_user.id).delete()
+    db.query(StandardShippingTask).filter(StandardShippingTask.user_id == main_user.id).delete()
+    db.commit()
     prod_tasks = ["Weigh Oils", "Mix Lye Solution", "Blend & Pour", "Cut Soap", "Cure Bars"]
     ship_tasks = ["Print Shipping Label", "Package Items", "Schedule Pickup"]
     for task_name in prod_tasks: db.add(StandardProductionTask(user_id=main_user.id, task_name=task_name))
@@ -143,7 +185,7 @@ try:
     db.commit()
     print(f"  > {len(prod_tasks)} production and {len(ship_tasks)} shipping tasks seeded.")
 
-    # --- 8. Purchase Orders and Stock Additions ---
+    # --- 8. Purchase Orders and Stock Additions (No simple delete, as it cascades) ---
     print("\nSeeding Purchases and Stock Lots...")
     po1 = PurchaseOrder(user_id=main_user.id, supplier_id=seeded_suppliers['SoapSupplies Co.'].id, order_date=datetime.date(2024, 5, 10), shipping_cost=Decimal('25.00'))
     po2 = PurchaseOrder(user_id=main_user.id, supplier_id=seeded_suppliers['ChemDirect'].id, order_date=datetime.date(2024, 5, 20), shipping_cost=Decimal('7.50'))
@@ -162,6 +204,8 @@ try:
 
     # --- 9. Products with Recipes & Workflows ---
     print("\nSeeding Products, Recipes, and Workflows...")
+    db.query(Product).filter(Product.user_id == main_user.id).delete()
+    db.commit()
     prod1 = Product(user_id=main_user.id, product_name="Lavender Bliss Soap Bar", product_code="LAV-001", retail_price_per_item=8.50)
     prod2 = Product(user_id=main_user.id, product_name="Charcoal Detox Bar", product_code="CHA-001", retail_price_per_item=9.00)
     prod3 = Product(user_id=main_user.id, product_name="Himalayan Salt Scrub", product_code="SAL-001", retail_price_per_item=12.50)
@@ -178,7 +222,7 @@ try:
     ]); db.commit()
     print(f"  > 3 products with recipes seeded.")
 
-    # --- 10. Production Runs & Batches ---
+    # --- 10. Production Runs & Batches (Cascading deletes, handled by dropping tables) ---
     print("\nSeeding Production Runs and Batches...")
     run1 = ProductionRun(user_id=main_user.id, product_id=prod1.id, planned_batch_count=1, notes="Initial test run")
     run2 = ProductionRun(user_id=main_user.id, product_id=prod2.id, planned_batch_count=2, notes="First full run of charcoal soap")
@@ -198,6 +242,8 @@ try:
 
     # --- 11. Customers & Invoices ---
     print("\nSeeding Customers and Invoices...")
+    db.query(Customer).filter(Customer.user_id == main_user.id).delete()
+    db.commit()
     c1 = Customer(user_id=main_user.id, name='The Corner Cafe', vat_number='IE1234567T')
     c2 = Customer(user_id=main_user.id, name='Boutique Blooms', address='123 Floral Lane, Dublin')
     c3 = Customer(user_id=main_user.id, name='The Health Hub', contact_email='orders@healthhub.ie')
@@ -213,12 +259,15 @@ try:
     db.add(InvoiceLineItem(invoice_id=inv1.id, product_id=prod1.id, quantity=20, unit_price=4.25, line_total=85, description=prod1.product_name))
     db.add(InvoiceLineItem(invoice_id=inv2.id, product_id=prod2.id, quantity=15, unit_price=4.50, line_total=67.5, description=prod2.product_name))
     db.add(InvoiceLineItem(invoice_id=inv3.id, product_id=prod1.id, quantity=10, unit_price=4.25, line_total=42.5, description=prod1.product_name))
+    # --- THE FIX: Corrected the typo from iv4 to inv4 ---
     db.add(InvoiceLineItem(invoice_id=inv4.id, product_id=prod2.id, quantity=2, unit_price=9.00, line_total=18.00, description=prod2.product_name))
     db.commit()
     print(f"  > 5 customers and 4 invoices seeded.")
 
     # --- 12. Expense Categories & Transactions ---
     print("\nSeeding Expense Categories and Transactions...")
+    db.query(ExpenseCategory).filter(ExpenseCategory.user_id == main_user.id).delete()
+    db.commit()
     exp_cat_names = ['Materials', 'Stationary', 'Phones', 'Advertising', 'Light & Heat', 'Rent & Rates', 'Misc', 'Capital']
     seeded_exp_cats = {}
     for name in exp_cat_names: db.add(ExpenseCategory(user_id=main_user.id, name=name))
@@ -245,7 +294,13 @@ try:
     db.add(doc); db.commit()
     print(f"  > 5 transactions seeded, with one sample document attached.")
 
-    print("\n--- Seeding Complete! ---")
+    print("\n\n✅ --- Seeding Complete! --- ✅")
+    print("Your database has been successfully populated. You can now run the main application.")
+
+except Exception as e:
+    print(f"\n❌ AN ERROR OCCURRED DURING SEEDING: {e}")
+    import traceback
+    traceback.print_exc()
 
 finally:
     db.close()

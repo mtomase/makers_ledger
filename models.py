@@ -56,12 +56,12 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String, nullable=True)
     hashed_password = Column(String, nullable=False)
-    country_code = Column(String(2), nullable=True) # e.g., "IE", "US", "GB"
+    country_code = Column(String(2), nullable=True)
     layout_preference = Column(SQLAlchemyEnum(UserLayoutEnumDef, name="user_layout_enum_def"), default=UserLayoutEnumDef.WIDE, nullable=False)
+    backup_retention_days = Column(Integer, nullable=False, default=7)
     role = Column(String, default="user")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    # Relationships
     ingredients = relationship("Ingredient", back_populates="user_ref", cascade="all, delete-orphan")
     suppliers = relationship("Supplier", back_populates="user_ref", cascade="all, delete-orphan")
     employees = relationship("Employee", back_populates="user_ref", cascade="all, delete-orphan")
@@ -123,7 +123,7 @@ class PurchaseOrder(Base):
     total_vat = Column(Numeric(10, 2), nullable=False, default=Decimal('0.0'))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     user_ref = relationship("User", back_populates="purchase_orders")
-    supplier_ref = relationship("Supplier", back_populates="purchase_orders")
+    supplier_ref = relationship("Supplier", foreign_keys=[supplier_id], back_populates="purchase_orders")
     line_items = relationship("StockAddition", back_populates="purchase_order_ref", cascade="all, delete-orphan")
     documents = relationship("PurchaseDocument", back_populates="purchase_order_ref", cascade="all, delete-orphan")
 
@@ -199,7 +199,7 @@ class GlobalSalary(Base):
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
     monthly_amount = Column(Numeric(10, 2), nullable=False)
     user_ref = relationship("User", back_populates="global_salaries")
-    employee_ref = relationship("Employee", back_populates="global_salary_entry")
+    employee_ref = relationship("Employee", foreign_keys=[employee_id], back_populates="global_salary_entry")
     __table_args__ = (UniqueConstraint('user_id', 'employee_id', name='uq_user_employee_global_salary'),)
 
 class Product(Base):
@@ -231,7 +231,7 @@ class Product(Base):
     materials = relationship("ProductMaterial", back_populates="product_ref", cascade="all, delete-orphan")
     production_tasks = relationship("ProductProductionTask", back_populates="product_ref", cascade="all, delete-orphan")
     shipping_tasks = relationship("ProductShippingTask", back_populates="product_ref", cascade="all, delete-orphan")
-    salary_alloc_employee_ref = relationship("Employee")
+    salary_alloc_employee_ref = relationship("Employee", foreign_keys=[salary_allocation_employee_id])
     production_runs = relationship("ProductionRun", back_populates="product_ref")
     invoice_line_items = relationship("InvoiceLineItem", back_populates="product_ref")
     __table_args__ = (UniqueConstraint('user_id', 'product_name', name='uq_user_product_name'),)
@@ -277,7 +277,7 @@ class ProductionRun(Base):
     planned_batch_count = Column(Integer, nullable=False)
     notes = Column(Text, nullable=True)
     user_ref = relationship("User", back_populates="production_runs")
-    product_ref = relationship("Product", back_populates="production_runs")
+    product_ref = relationship("Product", foreign_keys=[product_id], back_populates="production_runs")
     batch_records = relationship("BatchRecord", back_populates="production_run_ref", cascade="all, delete-orphan")
 
 class BatchRecord(Base):
@@ -294,8 +294,8 @@ class BatchRecord(Base):
     final_cured_weight_gr = Column(Numeric(10, 2), nullable=True)
     qc_ph_cured = Column(Numeric(4, 2), nullable=True)
     qc_final_quality_notes = Column(Text, nullable=True)
-    production_run_ref = relationship("ProductionRun", back_populates="batch_records")
-    person_responsible_ref = relationship("Employee", back_populates="batches_responsible_for")
+    production_run_ref = relationship("ProductionRun", foreign_keys=[production_run_id], back_populates="batch_records")
+    person_responsible_ref = relationship("Employee", foreign_keys=[person_responsible_id], back_populates="batches_responsible_for")
     ingredient_usages = relationship("BatchIngredientUsage", back_populates="batch_record_ref", cascade="all, delete-orphan")
     safety_checks = relationship("BatchSafetyCheck", back_populates="batch_record_ref", cascade="all, delete-orphan")
     production_tasks = relationship("BatchProductionTask", back_populates="batch_record_ref", cascade="all, delete-orphan")
@@ -358,8 +358,8 @@ class Invoice(Base):
     status = Column(SQLAlchemyEnum(InvoiceStatus, name="invoice_status_enum"), nullable=False, default=InvoiceStatus.DRAFT)
     notes = Column(Text, nullable=True)
     user_ref = relationship("User", back_populates="invoices")
-    customer_ref = relationship("Customer", back_populates="invoices")
-    supplier_ref = relationship("Supplier", back_populates="invoices")
+    customer_ref = relationship("Customer", foreign_keys=[customer_id], back_populates="invoices")
+    supplier_ref = relationship("Supplier", foreign_keys=[supplier_id], back_populates="invoices")
     line_items = relationship("InvoiceLineItem", back_populates="invoice_ref", cascade="all, delete-orphan")
     __table_args__ = (UniqueConstraint('user_id', 'invoice_number', name='uq_user_invoice_number'),)
 
@@ -399,10 +399,10 @@ class Transaction(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
     invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
     user_ref = relationship("User", back_populates="transactions")
-    category_ref = relationship("ExpenseCategory", back_populates="transactions")
-    supplier_ref = relationship("Supplier")
-    customer_ref = relationship("Customer")
-    invoice_ref = relationship("Invoice")
+    category_ref = relationship("ExpenseCategory", foreign_keys=[category_id], back_populates="transactions")
+    supplier_ref = relationship("Supplier", foreign_keys=[supplier_id])
+    customer_ref = relationship("Customer", foreign_keys=[customer_id])
+    invoice_ref = relationship("Invoice", foreign_keys=[invoice_id])
     documents = relationship("TransactionDocument", back_populates="transaction_ref", cascade="all, delete-orphan")
 
 class TransactionDocument(Base):
