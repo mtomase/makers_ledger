@@ -11,12 +11,41 @@ from sqlalchemy import (
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
 from dotenv import load_dotenv
+import urllib
 
 load_dotenv()
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL not found. Please set it in your environment or .env file.")
+# --- New connection logic for Azure SQL with Entra ID ---
+
+# Load connection details from environment variables
+db_server = os.environ.get("DB_SERVER")
+db_name = os.environ.get("DB_NAME")
+db_driver = os.environ.get("DB_DRIVER")
+entra_client_id = os.environ.get("ENTRA_CLIENT_ID")
+entra_client_secret = os.environ.get("ENTRA_CLIENT_SECRET")
+
+if not all([db_server, db_name, db_driver, entra_client_id, entra_client_secret]):
+    raise ValueError("One or more database connection environment variables are not set in your .env file.")
+
+# Create the ODBC connection string for Active Directory Service Principal authentication
+odbc_conn_str = (
+    f"DRIVER={db_driver};"
+    f"SERVER={db_server};"
+    f"DATABASE={db_name};"
+    f"UID={entra_client_id};"
+    f"PWD={entra_client_secret};"
+    f"Authentication=ActiveDirectoryServicePrincipal;"
+    "Encrypt=yes;"
+    "TrustServerCertificate=no;"
+    "Connection Timeout=30;"
+)
+
+# URL-encode the ODBC connection string for SQLAlchemy
+quoted_conn_str = urllib.parse.quote_plus(odbc_conn_str)
+
+# Create the final SQLAlchemy DATABASE_URL
+DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={quoted_conn_str}"
+
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -45,23 +74,23 @@ class IngredientType(Base):
     __tablename__ = "ingredient_types"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
+    name = Column(String(255), nullable=False)
     user_ref = relationship("User")
     __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_user_ingredient_type_name'),)
 
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True, nullable=False)
-    email = Column(String, unique=True, index=True, nullable=False)
-    name = Column(String, nullable=True)
-    hashed_password = Column(String, nullable=False)
+    username = Column(String(255), unique=True, index=True, nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    name = Column(String(255), nullable=True)
+    hashed_password = Column(String(255), nullable=False)
     country_code = Column(String(2), nullable=True)
     layout_preference = Column(SQLAlchemyEnum(UserLayoutEnumDef, name="user_layout_enum_def"), default=UserLayoutEnumDef.WIDE, nullable=False)
     backup_retention_days = Column(Integer, nullable=False, default=7)
-    role = Column(String, default="user")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    role = Column(String(50), default="user")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     ingredients = relationship("Ingredient", back_populates="user_ref", cascade="all, delete-orphan")
     suppliers = relationship("Supplier", back_populates="user_ref", cascade="all, delete-orphan")
     employees = relationship("Employee", back_populates="user_ref", cascade="all, delete-orphan")
@@ -81,13 +110,13 @@ class Supplier(Base):
     __tablename__ = "suppliers"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
+    name = Column(String(255), nullable=False)
     address = Column(Text, nullable=True)
-    phone_number = Column(String, nullable=True)
+    phone_number = Column(String(50), nullable=True)
     website_url = Column(Text, nullable=True)
-    contact_email = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    contact_email = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     user_ref = relationship("User", back_populates="suppliers")
     ingredients = relationship("Ingredient", secondary=ingredient_supplier_association, back_populates="suppliers")
     purchase_orders = relationship("PurchaseOrder", back_populates="supplier_ref")
@@ -98,13 +127,13 @@ class Ingredient(Base):
     __tablename__ = "ingredients"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
-    inci_name = Column(String, nullable=True)
+    name = Column(String(255), nullable=False)
+    inci_name = Column(String(255), nullable=True)
     ingredient_type_id = Column(Integer, ForeignKey("ingredient_types.id"), nullable=True)
     description = Column(Text, nullable=True)
     reorder_threshold_grams = Column(Numeric(10, 3), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     user_ref = relationship("User", back_populates="ingredients")
     ingredient_type_ref = relationship("IngredientType")
     suppliers = relationship("Supplier", secondary=ingredient_supplier_association, back_populates="ingredients")
@@ -121,7 +150,7 @@ class PurchaseOrder(Base):
     shipping_cost = Column(Numeric(10, 2), nullable=False, default=Decimal('0.0'))
     notes = Column(Text, nullable=True)
     total_vat = Column(Numeric(10, 2), nullable=False, default=Decimal('0.0'))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now())
     user_ref = relationship("User", back_populates="purchase_orders")
     supplier_ref = relationship("Supplier", foreign_keys=[supplier_id], back_populates="purchase_orders")
     line_items = relationship("StockAddition", back_populates="purchase_order_ref", cascade="all, delete-orphan")
@@ -131,9 +160,9 @@ class PurchaseDocument(Base):
     __tablename__ = "purchase_documents"
     id = Column(Integer, primary_key=True, index=True)
     purchase_order_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False)
-    file_path = Column(String, nullable=False)
-    original_filename = Column(String, nullable=False)
-    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+    file_path = Column(String(1024), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    uploaded_at = Column(DateTime, server_default=func.now())
     purchase_order_ref = relationship("PurchaseOrder", back_populates="documents")
 
 class StockAddition(Base):
@@ -143,7 +172,7 @@ class StockAddition(Base):
     ingredient_id = Column(Integer, ForeignKey("ingredients.id"), nullable=False)
     quantity_added_grams = Column(Numeric(10, 3), nullable=False)
     item_cost = Column(Numeric(10, 2), nullable=False)
-    supplier_lot_number = Column(String, nullable=True)
+    supplier_lot_number = Column(String(255), nullable=True)
     quantity_remaining_grams = Column(Numeric(10, 3), nullable=False, default=Decimal('0.0'))
     vat_amount = Column(Numeric(10, 2), nullable=False, default=Decimal('0.0'))
     ingredient_ref = relationship("Ingredient", back_populates="stock_additions")
@@ -154,11 +183,11 @@ class Employee(Base):
     __tablename__ = "employees"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
+    name = Column(String(255), nullable=False)
     hourly_rate = Column(Numeric(10, 2), nullable=False)
-    role = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    role = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     user_ref = relationship("User", back_populates="employees")
     global_salary_entry = relationship("GlobalSalary", back_populates="employee_ref", uselist=False, cascade="all, delete-orphan")
     production_task_assignments = relationship("ProductProductionTask", back_populates="employee_ref")
@@ -171,7 +200,7 @@ class StandardProductionTask(Base):
     __tablename__ = "standard_production_tasks"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    task_name = Column(String, nullable=False)
+    task_name = Column(String(255), nullable=False)
     user_ref = relationship("User", back_populates="standard_production_tasks")
     __table_args__ = (UniqueConstraint('user_id', 'task_name', name='uq_user_std_prod_task_name'),)
 
@@ -179,7 +208,7 @@ class StandardShippingTask(Base):
     __tablename__ = "standard_shipping_tasks"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    task_name = Column(String, nullable=False)
+    task_name = Column(String(255), nullable=False)
     user_ref = relationship("User", back_populates="standard_shipping_tasks")
     __table_args__ = (UniqueConstraint('user_id', 'task_name', name='uq_user_std_ship_task_name'),)
 
@@ -206,7 +235,7 @@ class Product(Base):
     __tablename__ = "products"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    product_name = Column(String, nullable=False)
+    product_name = Column(String(255), nullable=False)
     product_code = Column(String(10), nullable=True)
     retail_price_per_item = Column(Numeric(10, 2), default=Decimal('10.00'), nullable=True)
     wholesale_price_per_item = Column(Numeric(10, 2), default=Decimal('5.00'), nullable=True)
@@ -225,8 +254,8 @@ class Product(Base):
     wholesale_flat_fee_per_order = Column(Numeric(10, 2), nullable=True)
     distribution_wholesale_percentage = Column(Numeric(5, 4), default=Decimal('0.5'), nullable=True)
     buffer_percentage = Column(Numeric(5, 4), default=Decimal('0.2'), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     user_ref = relationship("User", back_populates="products")
     materials = relationship("ProductMaterial", back_populates="product_ref", cascade="all, delete-orphan")
     production_tasks = relationship("ProductProductionTask", back_populates="product_ref", cascade="all, delete-orphan")
@@ -273,7 +302,7 @@ class ProductionRun(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
-    run_date = Column(DateTime(timezone=True), server_default=func.now())
+    run_date = Column(DateTime, server_default=func.now())
     planned_batch_count = Column(Integer, nullable=False)
     notes = Column(Text, nullable=True)
     user_ref = relationship("User", back_populates="production_runs")
@@ -285,7 +314,7 @@ class BatchRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    batch_code = Column(String, unique=True, nullable=False)
+    batch_code = Column(String(255), unique=True, nullable=False)
     person_responsible_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     manufacturing_date = Column(Date, default=datetime.date.today)
     cured_date = Column(Date, nullable=True)
@@ -315,7 +344,7 @@ class BatchSafetyCheck(Base):
     __tablename__ = "batch_safety_checks"
     id = Column(Integer, primary_key=True, index=True)
     batch_record_id = Column(Integer, ForeignKey("batch_records.id"), nullable=False)
-    check_name = Column(String, nullable=False)
+    check_name = Column(String(255), nullable=False)
     status = Column(SQLAlchemyEnum(SafetyCheckStatus, name="safety_check_status_enum"), nullable=False, default=SafetyCheckStatus.NOT_APPLICABLE)
     batch_record_ref = relationship("BatchRecord", back_populates="safety_checks")
     __table_args__ = (UniqueConstraint('batch_record_id', 'check_name', name='uq_batch_safety_check'),)
@@ -335,10 +364,10 @@ class Customer(Base):
     __tablename__ = "customers"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
-    contact_email = Column(String, nullable=True)
+    name = Column(String(255), nullable=False)
+    contact_email = Column(String(255), nullable=True)
     address = Column(Text, nullable=True)
-    vat_number = Column(String, nullable=True)
+    vat_number = Column(String(50), nullable=True)
     user_ref = relationship("User", back_populates="customers")
     invoices = relationship("Invoice", back_populates="customer_ref")
     __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_user_customer_name'),)
@@ -347,7 +376,7 @@ class Invoice(Base):
     __tablename__ = "invoices"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    invoice_number = Column(String, nullable=False)
+    invoice_number = Column(String(255), nullable=False)
     invoice_date = Column(Date, nullable=False, default=datetime.date.today)
     due_date = Column(Date, nullable=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
@@ -368,7 +397,7 @@ class InvoiceLineItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
-    description = Column(String, nullable=False)
+    description = Column(String(1000), nullable=False)
     quantity = Column(Numeric(10, 2), nullable=False)
     unit_price = Column(Numeric(10, 2), nullable=False)
     vat_rate_percent = Column(Numeric(5, 2), default=Decimal('23.00'))
@@ -380,7 +409,7 @@ class ExpenseCategory(Base):
     __tablename__ = "expense_categories"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
+    name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     user_ref = relationship("User", back_populates="expense_categories")
     transactions = relationship("Transaction", back_populates="category_ref")
@@ -391,7 +420,7 @@ class Transaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     date = Column(Date, nullable=False, default=datetime.date.today)
-    description = Column(String, nullable=False)
+    description = Column(String(1000), nullable=False)
     amount = Column(Numeric(10, 2), nullable=False)
     transaction_type = Column(SQLAlchemyEnum(TransactionType, name="transaction_type_enum"), nullable=False)
     category_id = Column(Integer, ForeignKey("expense_categories.id"), nullable=True)
@@ -409,9 +438,9 @@ class TransactionDocument(Base):
     __tablename__ = "transaction_documents"
     id = Column(Integer, primary_key=True, index=True)
     transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False)
-    file_path = Column(String, nullable=False)
-    original_filename = Column(String, nullable=False)
-    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+    file_path = Column(String(1024), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    uploaded_at = Column(DateTime, server_default=func.now())
     transaction_ref = relationship("Transaction", back_populates="documents")
 
 

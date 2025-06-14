@@ -16,7 +16,8 @@ werkzeug
 
 # Database & ORM
 sqlalchemy
-psycopg2-binary
+#psycopg2-binary
+pip install pyodbc msal
 alembic
 
 # Data Handling & Utilities
