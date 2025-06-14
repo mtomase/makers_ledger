@@ -8,7 +8,6 @@ import datetime
 from streamlit_js_eval import streamlit_js_eval
 
 # --- Model and Utility Imports ---
-# FIX: Import UserLayoutEnumDef to correctly handle new user creation
 from models import get_db, User, SessionLocal, UserLayoutEnumDef
 
 # --- Page Imports ---
@@ -31,11 +30,8 @@ from app_pages import (
 )
 
 
-# --- MODIFICATION: Page Configuration at the Top ---
-# This logic runs at the beginning of every script rerun.
-# It checks if a user is already logged in to set their preferred layout.
+# --- Page Configuration at the Top ---
 def get_user_layout():
-    # Default to wide if no one is logged in yet.
     layout = "wide"
     if st.session_state.get("authentication_status"):
         try:
@@ -47,7 +43,6 @@ def get_user_layout():
             db.close()
     return layout
 
-# st.set_page_config() must be the first Streamlit command.
 st.set_page_config(
     page_title="Maker's Ledger", 
     page_icon="📓", 
@@ -185,7 +180,6 @@ def main():
     elif st.session_state["authentication_status"] is None:
         st.warning("Please enter your username and password to login, or register if you are a new user.")
         try:
-            # --- FIX: Pass the list of preauthorized emails from the config file ---
             email_of_registered_user, username_of_registered_user, name_of_registered_user = authenticator.register_user(
                 pre_authorized=config_auth['preauthorized']['emails']
             )
@@ -200,7 +194,6 @@ def main():
                         name=name_of_registered_user, 
                         hashed_password=hashed_password,
                         country_code='IE',
-                        # --- FIX: Use the Enum member, not a string, for the default layout ---
                         layout_preference=UserLayoutEnumDef.WIDE
                     )
                     db.add(db_user)
