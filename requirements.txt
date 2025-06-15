@@ -17,7 +17,7 @@ werkzeug
 # Database & ORM
 sqlalchemy
 #psycopg2-binary
-#pyodbc
+pyodbc
 msal
 alembic
 
