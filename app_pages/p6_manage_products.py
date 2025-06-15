@@ -17,6 +17,7 @@ from models import (
 
 # --- REBUILT Cost Calculation Logic ---
 def calculate_full_costs(product_id: int, db: Session, user_id: int):
+    # This function remains largely the same, but we'll ensure variable names are clear
     product = db.query(Product).options(
         selectinload(Product.materials).joinedload(ProductMaterial.inventoryitem_ref),
         selectinload(Product.production_tasks).joinedload(ProductProductionTask.standard_task_ref),
@@ -29,14 +30,11 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
 
     breakdown = {}
     
-    # --- CHANGED: Material Cost now INCLUDES packaging ---
-    # The logic here is now simpler and more powerful. It treats ingredients and packaging identically.
     material_cost_per_item = Decimal('0.0')
     missing_inventoryitem_costs = []
     material_details = []
     if product.materials:
         for material in product.materials:
-            # 'material' is now a generic term for any item in the Bill of Materials
             additions = db.query(StockAddition).join(PurchaseOrder).filter(
                 StockAddition.inventoryitem_id == material.inventoryitem_id,
                 PurchaseOrder.user_id == user_id
@@ -45,19 +43,18 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
                 missing_inventoryitem_costs.append(material.inventoryitem_ref.name)
                 continue
             total_cost_for_inventoryitem = Decimal('0.0')
-            total_grams_for_inventoryitem = Decimal('0.0') # Note: For packaging, this might represent "units"
+            total_quantity_for_inventoryitem = Decimal('0.0')
             for add in additions:
                 total_items_in_po = db.query(func.count(StockAddition.id)).filter(StockAddition.purchase_order_id == add.purchase_order_id).scalar()
                 shipping_per_item = add.purchase_order_ref.shipping_cost / total_items_in_po if total_items_in_po > 0 else Decimal('0.0')
                 true_cost_of_addition = add.item_cost + shipping_per_item
                 total_cost_for_inventoryitem += true_cost_of_addition
-                total_grams_for_inventoryitem += add.quantity_added_grams
+                total_quantity_for_inventoryitem += add.quantity_added_grams
             
-            if total_grams_for_inventoryitem > 0:
-                avg_cost_per_gram = total_cost_for_inventoryitem / total_grams_for_inventoryitem
-                cost_for_material = material.quantity_grams * avg_cost_per_gram
+            if total_quantity_for_inventoryitem > 0:
+                avg_cost_per_unit = total_cost_for_inventoryitem / total_quantity_for_inventoryitem
+                cost_for_material = material.quantity_grams * avg_cost_per_unit
                 material_cost_per_item += cost_for_material
-                # --- CHANGED: Renamed "Ingredient" to "Item" for clarity
                 material_details.append({"Item": material.inventoryitem_ref.name, "Qty": material.quantity_grams, "Cost": cost_for_material})
             else:
                 missing_inventoryitem_costs.append(material.inventoryitem_ref.name)
@@ -66,7 +63,6 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
     breakdown['total_material_cost_per_item'] = material_cost_per_item
     breakdown['missing_inventoryitem_costs'] = missing_inventoryitem_costs
 
-    # Labor Cost (No change needed here)
     labor_cost_per_item = Decimal('0.0')
     labor_details = []
     for p_task in product.production_tasks:
@@ -78,7 +74,6 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
     breakdown['labor_details'] = labor_details
     breakdown['total_labor_cost_per_item'] = labor_cost_per_item
 
-    # Overhead Cost (No change needed here)
     allocated_salary_cost_per_item = Decimal('0.0')
     if product.salary_allocation_employee_id and product.salary_alloc_employee_ref and product.salary_alloc_employee_ref.global_salary_entry:
         monthly_salary = product.salary_alloc_employee_ref.global_salary_entry.monthly_amount or Decimal('0.0')
@@ -98,14 +93,9 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
     breakdown['allocated_rent_utilities_cost_per_item'] = allocated_rent_utilities_cost_per_item
     breakdown['total_allocated_overheads_per_item'] = allocated_salary_cost_per_item + allocated_rent_utilities_cost_per_item
 
-    # --- REMOVED: Standalone Packaging Cost section ---
-    # This is now calculated as part of the material cost.
-
-    # --- CHANGED: Total Production Cost calculation is now simpler ---
     total_production_cost = material_cost_per_item + labor_cost_per_item + breakdown['total_allocated_overheads_per_item']
     breakdown['total_production_cost_per_item'] = total_production_cost
     
-    # Channel Costs & Profitability (No change needed here)
     retail_price = product.retail_price_per_item or Decimal('0.0')
     retail_cc_fee = retail_price * (product.retail_cc_fee_percent or Decimal('0.0'))
     retail_platform_fee = retail_price * (product.retail_platform_fee_percent or Decimal('0.0'))
@@ -137,8 +127,6 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
 
     return breakdown
 
-# --- UI Rendering Functions ---
-
 def render_new_product_form(user: User):
     st.subheader("➕ Add New Product")
     with st.form("new_product_form", clear_on_submit=True):
@@ -168,62 +156,54 @@ def render_new_product_form(user: User):
 def render_product_editor(db: Session, user: User, product: Product, is_mobile: bool):
     st.header(f"⚙️ Editing: {product.product_name}")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["Bill of Materials", "Workflow", "Pricing & Channels", "Cost Analysis"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🧾 Bill of Materials", "Workflow", "Pricing & Channels", "Cost Analysis"])
 
     with tab1:
         st.subheader("Bill of Materials")
-        # --- CHANGED: This now fetches ALL inventory items, including packaging
         all_inventoryitems = db.query(InventoryItem).filter(InventoryItem.user_id == user.id).order_by(InventoryItem.name).all()
         
-        prerequisites_met_recipe = bool(all_inventoryitems)
+        prerequisites_met_bom = bool(all_inventoryitems)
         
-        if not prerequisites_met_recipe:
-            # --- CHANGED: Updated help text
-            st.warning("No inventory items found. Please add items (i.e. ingredients, packaging, etc... on the 'Manage Inventory' page to create a bill of materials.")
+        if not prerequisites_met_bom:
+            st.warning("No inventory items found. Please add items on the 'Manage Inventory' page to create a bill of materials.")
 
-        # --- CHANGED: More generic column names
-        df_recipe_columns = {
-            "ID": [], "Item": [], "Quantity": []
-        }
+        df_bom_columns = {"ID": [], "Item": [], "Quantity": []}
         
-        recipe_data = []
+        bom_data = []
         if product.materials:
-            # --- CHANGED: More generic column names
-            recipe_data = [{"ID": m.id, "Item": m.inventoryitem_ref.name, "Quantity (grams for ingredients /units for packaging)": m.quantity_grams} for m in product.materials]
+            bom_data = [{"ID": m.id, "Item": m.inventoryitem_ref.name, "Quantity": m.quantity_grams} for m in product.materials]
         
-        df_recipe = pd.DataFrame(recipe_data if recipe_data else df_recipe_columns)
+        df_bom = pd.DataFrame(bom_data if bom_data else df_bom_columns)
 
-        edited_recipe_df = st.data_editor(
-            df_recipe, 
+        edited_bom_df = st.data_editor(
+            df_bom, 
             num_rows="dynamic", 
-            key="recipe_editor",
-            disabled=not prerequisites_met_recipe,
+            key="bom_editor",
+            disabled=not prerequisites_met_bom,
             column_config={
                 "ID": None,
-                # --- CHANGED: More generic column names and options
-                "Item": st.column_config.SelectboxColumn("Item*", options=[ing.name for ing in all_inventoryitems], required=True),
+                "Item": st.column_config.SelectboxColumn("Item*", options=[item.name for item in all_inventoryitems], required=True),
                 "Quantity": st.column_config.NumberColumn("Quantity*", help="For ingredients, use grams. For packaging, use units (e.g., 1 for one box).", required=True, min_value=0.0, format="%.3f")
             }, 
             use_container_width=True, 
             hide_index=True
         )
         
-        if st.button("💾 Save Changes", type="primary", disabled=not prerequisites_met_recipe):
+        if st.button("💾 Save Bill of Materials", type="primary", disabled=not prerequisites_met_bom):
             with SessionLocal() as transaction_db:
                 try:
                     transaction_db.query(ProductMaterial).filter(ProductMaterial.product_id == product.id).delete(synchronize_session=False)
-                    ing_map = {ing.name: ing.id for ing in all_inventoryitems}
-                    for _, row in edited_recipe_df.iterrows():
-                        # --- CHANGED: More generic variable names
+                    item_map = {item.name: item.id for item in all_inventoryitems}
+                    for _, row in edited_bom_df.iterrows():
                         item_name, quantity = row["Item"], row["Quantity"]
                         if not item_name or pd.isna(quantity) or quantity <= 0: continue
-                        ing_id = ing_map.get(item_name)
-                        if ing_id:
-                            transaction_db.add(ProductMaterial(product_id=product.id, inventoryitem_id=ing_id, quantity_grams=Decimal(str(quantity))))
+                        item_id = item_map.get(item_name)
+                        if item_id:
+                            transaction_db.add(ProductMaterial(product_id=product.id, inventoryitem_id=item_id, quantity_grams=Decimal(str(quantity))))
                     transaction_db.commit()
-                    st.success("BOM updated successfully!")
+                    st.success("Bill of Materials updated successfully!")
                 except Exception as e:
-                    transaction_db.rollback(); st.error(f"Error saving BOM: {e}")
+                    transaction_db.rollback(); st.error(f"Error saving Bill of Materials: {e}")
             st.rerun()
 
     with tab2:
@@ -242,9 +222,7 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
             if not employee_names:
                 st.warning("You must add at least one 'Employee' before assigning tasks. Please go to the 'Settings' page to add employees.")
         
-        df_workflow_columns = {
-            "ID": [], "Task": [], "Assigned To": [], "Time (minutes)": []
-        }
+        df_workflow_columns = {"ID": [], "Task": [], "Assigned To": [], "Time (minutes)": []}
         
         workflow_data = []
         if product.production_tasks:
@@ -289,15 +267,13 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
             st.rerun()
 
     with tab3:
-        st.subheader("Pricing, Overheads & Channels") # --- CHANGED: Removed "Packaging" from title
+        st.subheader("Pricing, Overheads & Channels")
         with st.form("pricing_form"):
             st.markdown("#### Pricing Strategy")
             c1, c2, c3 = st.columns(3)
             retail_price = c1.number_input("Retail Price/Item (€)", value=float(product.retail_price_per_item or 0.0), format="%.2f")
             wholesale_price = c2.number_input("Wholesale Price/Item (€)", value=float(product.wholesale_price_per_item or 0.0), format="%.2f")
             buffer = c3.slider("Profit Buffer (%)", 0, 200, int((product.buffer_percentage or 0)*100), format="%d%%")
-            
-            # --- REMOVED: The entire "Packaging Costs" section is gone from the UI.
             
             st.markdown("#### Overhead Allocation")
             all_salaried_employees = db.query(Employee).join(GlobalSalary).filter(Employee.user_id==user.id).all()
@@ -330,9 +306,6 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
                     p_to_update.retail_price_per_item = Decimal(str(retail_price))
                     p_to_update.wholesale_price_per_item = Decimal(str(wholesale_price))
                     p_to_update.buffer_percentage = Decimal(buffer) / 100
-                    # --- REMOVED: Obsolete fields are no longer updated.
-                    # p_to_update.packaging_label_cost = Decimal(str(label_cost))
-                    # p_to_update.packaging_material_cost = Decimal(str(pkg_cost))
                     p_to_update.salary_allocation_employee_id = selected_sal_emp_id
                     p_to_update.salary_allocation_items_per_month = sal_alloc_items
                     p_to_update.rent_utilities_allocation_items_per_month = rent_alloc_items
@@ -359,7 +332,6 @@ def render_cost_analysis(db: Session, user: User, product: Product, is_mobile: b
         st.error("An error occurred during cost calculation.")
         return
     if cost_data["missing_inventoryitem_costs"]:
-        # --- CHANGED: More generic help text
         st.warning(f"Could not calculate full material cost. Please record a purchase for these inventory items: {', '.join(cost_data['missing_inventoryitem_costs'])}")
 
     c1, c2, c3, c4 = st.columns(4)
@@ -387,7 +359,6 @@ def render_cost_analysis(db: Session, user: User, product: Product, is_mobile: b
         st.metric("Profit per Item", f"€{ws['profit']:.2f}", delta_color="normal")
         st.metric("Margin", f"{ws['margin_percent']:.1f}%")
 
-# --- Main Page Render Function ---
 def render(db: Session, user: User, is_mobile: bool):
     st.header("📦 Product Management")
     st.write("Create new products or select an existing one to manage its bill of materials, workflow, and costs.")

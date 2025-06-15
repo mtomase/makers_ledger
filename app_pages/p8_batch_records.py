@@ -13,15 +13,14 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models import (
     SessionLocal, User, Product, ProductionRun, BatchRecord, 
-    BatchIngredientUsage, StockAddition, ProductMaterial, Employee,
+    BatchIngredientUsage, StockAddition, ProductMaterial, Employee, InventoryItem,
     ProductProductionTask, StandardProductionTask, BatchProductionTask, PurchaseOrder
 )
 
-# --- Helper Functions (Unchanged) ---
+# --- Helper Functions ---
 def init_state():
     if 'editing_batch_id' not in st.session_state: st.session_state.editing_batch_id = None
     if 'show_new_run_form' not in st.session_state: st.session_state.show_new_run_form = False
-    # State for confirmation dialogs
     if 'show_back_confirm_batch' not in st.session_state: st.session_state.show_back_confirm_batch = False
     if 'show_delete_confirm_batch' not in st.session_state: st.session_state.show_delete_confirm_batch = False
 
@@ -39,7 +38,6 @@ def generate_next_batch_code(db: Session, user_id: int, product_code: str | None
     return f"{search_prefix}{next_seq:02d}"
 
 def render_new_run_form(db: Session, user: User):
-    # Unchanged
     st.subheader("🚀 Start New Production Run")
     products = db.query(Product).filter(Product.user_id == user.id).order_by(Product.product_name).all()
     if not products: st.error("You must create a Product before you can start a production run."); return
@@ -70,18 +68,14 @@ def render_batch_editor(db: Session, user: User):
     if not batch:
         st.error("Could not load the selected batch."); st.session_state.editing_batch_id = None; st.rerun(); return
 
-    # --- Confirmation Dialog Logic ---
     if st.session_state.show_back_confirm_batch:
         with st.container(border=True):
             st.warning("Are you sure you want to go back to the list? Unsaved changes in the main details form will be lost.")
             c1, c2 = st.columns(2)
             if c1.button("Yes, Go Back", use_container_width=True, key="confirm_back_batch"):
-                st.session_state.show_back_confirm_batch = False
-                st.session_state.editing_batch_id = None
-                st.rerun()
+                st.session_state.show_back_confirm_batch = False; st.session_state.editing_batch_id = None; st.rerun()
             if c2.button("No, Stay Here", use_container_width=True, key="keep_editing_batch"):
-                st.session_state.show_back_confirm_batch = False
-                st.rerun()
+                st.session_state.show_back_confirm_batch = False; st.rerun()
         return
 
     if st.session_state.show_delete_confirm_batch:
@@ -93,17 +87,13 @@ def render_batch_editor(db: Session, user: User):
                     batch_to_delete = t_db.query(BatchRecord).filter(BatchRecord.id == batch.id).one()
                     t_db.delete(batch_to_delete); t_db.commit()
                 st.success(f"Batch '{batch.batch_code}' has been deleted.")
-                st.session_state.show_delete_confirm_batch = False
-                st.session_state.editing_batch_id = None
-                st.rerun()
+                st.session_state.show_delete_confirm_batch = False; st.session_state.editing_batch_id = None; st.rerun()
             if c2.button("No, Go Back", use_container_width=True, key="keep_batch_safe"):
-                st.session_state.show_delete_confirm_batch = False
-                st.rerun()
+                st.session_state.show_delete_confirm_batch = False; st.rerun()
         return
 
-    # --- Main Editor View ---
     st.subheader(f"📝 Editing Batch: {batch.batch_code}")
-    tab_main, tab_trace, tab_workflow = st.tabs(["Main Details", "🌿 Inventory Item Traceability", "📋 Production Workflow"])
+    tab_main, tab_trace, tab_workflow = st.tabs(["Main Details", "🌿 Item Traceability", "📋 Production Workflow"])
     with tab_main:
         render_main_details_form(db, user, batch)
     with tab_trace:
@@ -134,7 +124,6 @@ def render_main_details_form(db: Session, user: User, batch: BatchRecord):
         ph_cured = d3.number_input("Cured pH", value=float(batch.qc_ph_cured or 0.0), format="%.2f")
         notes = st.text_area("Final Quality Notes", value=batch.qc_final_quality_notes or "")
         
-        # --- FIX: Removed use_container_width=True ---
         submitted = st.form_submit_button("💾 Save Main Details", type="primary")
         if submitted:
             with SessionLocal() as transaction_db:
@@ -147,36 +136,34 @@ def render_main_details_form(db: Session, user: User, batch: BatchRecord):
                     transaction_db.rollback(); st.error(f"Error saving: {e}")
             st.rerun()
 
-    # --- Action Buttons (outside the form) ---
     c1, c2, _ = st.columns([1, 1, 5])
     if c1.button("⬅️ Back to List", use_container_width=True):
-        st.session_state.show_back_confirm_batch = True
-        st.rerun()
-
+        st.session_state.show_back_confirm_batch = True; st.rerun()
     if c2.button("🗑️ Delete Batch", use_container_width=True):
-        st.session_state.show_delete_confirm_batch = True
-        st.rerun()
+        st.session_state.show_delete_confirm_batch = True; st.rerun()
 
 def render_traceability_section(db: Session, user: User, batch: BatchRecord):
-    # Unchanged
-    product_recipe = batch.production_run_ref.product_ref.materials
-    if not product_recipe: st.warning("This product has no recipe defined. Please add materials on the 'Manage Products' page."); return
-    usage_summary = {m.inventoryitem_id: {"name": m.inventoryitem_ref.name, "required": m.quantity_grams, "used": Decimal("0.0")} for m in product_recipe}
+    bom = batch.production_run_ref.product_ref.materials
+    if not bom: st.warning("This product has no Bill of Materials defined. Please add items on the 'Manage Products' page."); return
+    
+    usage_summary = {m.inventoryitem_id: {"name": m.inventoryitem_ref.name, "required": m.quantity_grams, "used": Decimal("0.0")} for m in bom}
     for usage in batch.inventoryitem_usages:
         if usage.inventoryitem_id in usage_summary: usage_summary[usage.inventoryitem_id]["used"] += usage.quantity_used_grams
-    summary_data = [{"Ingredient": v["name"], "Required (g)": f"{v['required']:.2f}", "Used (g)": f"{v['used']:.2f}", "Status": "✅" if v['used'] >= v['required'] else "⏳"} for k, v in usage_summary.items()]
+    
+    summary_data = [{"Item": v["name"], "Required": f"{v['required']:.2f}", "Used": f"{v['used']:.2f}", "Status": "✅" if v['used'] >= v['required'] else "⏳"} for k, v in usage_summary.items()]
     st.dataframe(summary_data, hide_index=True, use_container_width=True)
     st.markdown("---")
-    for material in product_recipe:
-        with st.expander(f"Allocate **{material.inventoryitem_ref.name}** (Required: {material.quantity_grams:.2f}g)"):
+
+    for material in bom:
+        with st.expander(f"Allocate **{material.inventoryitem_ref.name}** (Required: {material.quantity_grams:.2f})"):
             required_qty, used_qty = usage_summary[material.inventoryitem_id]['required'], usage_summary[material.inventoryitem_id]['used']
             remaining_needed = max(Decimal("0.0"), required_qty - used_qty)
-            st.write("**Current Allocations for this Ingredient:**")
-            current_usages_for_inventoryitem = [u for u in batch.inventoryitem_usages if u.inventoryitem_id == material.inventoryitem_id]
-            if not current_usages_for_inventoryitem: st.write("_None_")
+            st.write("**Current Allocations for this Item:**")
+            current_usages_for_item = [u for u in batch.inventoryitem_usages if u.inventoryitem_id == material.inventoryitem_id]
+            if not current_usages_for_item: st.write("_None_")
             else:
-                for usage in current_usages_for_inventoryitem:
-                    st.info(f"Used **{usage.quantity_used_grams:.2f}g** from Lot #**{usage.stock_addition_ref.supplier_lot_number or 'N/A'}** (Purchased: {usage.stock_addition_ref.purchase_order_ref.order_date})")
+                for usage in current_usages_for_item:
+                    st.info(f"Used **{usage.quantity_used_grams:.2f}** from Lot #**{usage.stock_addition_ref.supplier_lot_number or 'N/A'}** (Purchased: {usage.stock_addition_ref.purchase_order_ref.order_date})")
             st.markdown("---")
             if remaining_needed <= 0: st.success(f"✅ Requirement for {material.inventoryitem_ref.name} has been met.")
             else:
@@ -184,13 +171,13 @@ def render_traceability_section(db: Session, user: User, batch: BatchRecord):
                 available_stock = db.query(StockAddition).join(PurchaseOrder).filter(PurchaseOrder.user_id == user.id, StockAddition.inventoryitem_id == material.inventoryitem_id, StockAddition.quantity_remaining_grams > 0).order_by(PurchaseOrder.order_date).all()
                 if not available_stock: st.warning(f"No stock available for {material.inventoryitem_ref.name}. Please add a purchase on the 'Stock Management' page."); continue
                 with st.form(key=f"form_alloc_{material.inventoryitem_id}"):
-                    lot_options = {f"Lot #{s.supplier_lot_number or 'N/A'} (Rem: {s.quantity_remaining_grams:.2f}g, Date: {s.purchase_order_ref.order_date})": s.id for s in available_stock}
+                    lot_options = {f"Lot #{s.supplier_lot_number or 'N/A'} (Rem: {s.quantity_remaining_grams:.2f}, Date: {s.purchase_order_ref.order_date})": s.id for s in available_stock}
                     selected_lot_str = st.selectbox("Select Stock Lot", options=lot_options.keys())
                     selected_stock_id = lot_options.get(selected_lot_str)
                     selected_stock_obj = next((s for s in available_stock if s.id == selected_stock_id), None)
                     max_qty_in_lot = selected_stock_obj.quantity_remaining_grams if selected_stock_obj else Decimal("0.0")
                     default_qty_to_use = min(remaining_needed, max_qty_in_lot)
-                    qty_to_use = st.number_input("Quantity to Use (g)", min_value=0.01, max_value=float(max_qty_in_lot), value=float(default_qty_to_use), format="%.3f")
+                    qty_to_use = st.number_input("Quantity to Use (g or units)", min_value=0.01, max_value=float(max_qty_in_lot), value=float(default_qty_to_use), format="%.3f")
                     if st.form_submit_button("Allocate"):
                         with SessionLocal() as transaction_db:
                             try:
@@ -206,7 +193,6 @@ def render_traceability_section(db: Session, user: User, batch: BatchRecord):
                                 transaction_db.rollback(); st.error(f"An error occurred: {e}")
 
 def render_workflow_section(db: Session, user: User, batch: BatchRecord):
-    # Unchanged
     st.write("Record the actual employee who performed each task for this specific batch. The default is from the product template.")
     standard_workflow = batch.production_run_ref.product_ref.production_tasks
     if not standard_workflow: st.warning("This product has no workflow defined on the 'Manage Products' page."); return
@@ -234,7 +220,6 @@ def render_workflow_section(db: Session, user: User, batch: BatchRecord):
             st.rerun()
 
 def render(db: Session, user: User, is_mobile: bool):
-    # Unchanged
     st.header("📋 Batch Records")
     st.write("Create and manage your production batch records, ensuring full traceability from raw materials to finished goods.")
     init_state()

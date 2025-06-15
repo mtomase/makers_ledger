@@ -12,16 +12,12 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
 from dotenv import load_dotenv
 import urllib
-
-# --- ADDED: Imports for retry logic from previous step ---
 from sqlalchemy.exc import OperationalError
 import time
-# --- END ADDED ---
-
 
 load_dotenv()
 
-# --- Connection logic ---
+# --- Connection logic (including retry logic) ---
 db_server = os.environ.get("DB_SERVER")
 db_name = os.environ.get("DB_NAME")
 db_driver = os.environ.get("DB_DRIVER")
@@ -51,18 +47,13 @@ def create_engine_with_retry(db_url: str):
     RETRY_DELAY_SECONDS = 10
     for attempt in range(MAX_RETRIES):
         try:
-            print(f"Attempting to connect to the database (Attempt {attempt + 1}/{MAX_RETRIES})...")
             engine = create_engine(db_url)
             with engine.connect() as connection:
-                print("✅ Database connection successful!")
                 return engine
-        except OperationalError as e:
-            print(f"⚠️ Connection failed: {e}")
+        except OperationalError:
             if attempt < MAX_RETRIES - 1:
-                print(f"Database may be starting up. Retrying in {RETRY_DELAY_SECONDS} seconds...")
                 time.sleep(RETRY_DELAY_SECONDS)
             else:
-                print("❌ All connection attempts failed.")
                 raise
     raise Exception("Could not create a database engine after multiple retries.")
 
@@ -89,7 +80,7 @@ class TransactionType(enum.Enum):
 
 # --- Model Classes ---
 
-class IngredientType(Base):
+class InventoryItemType(Base):
     __tablename__ = "inventoryitem_types"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
@@ -110,7 +101,6 @@ class User(Base):
     role = Column(String(50), default="user")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
     inventoryitems = relationship("InventoryItem", back_populates="user_ref", cascade="all, delete-orphan")
     suppliers = relationship("Supplier", back_populates="user_ref", cascade="all, delete-orphan")
     employees = relationship("Employee", back_populates="user_ref", cascade="all, delete-orphan")
@@ -138,13 +128,11 @@ class Supplier(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     user_ref = relationship("User", back_populates="suppliers")
-    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
     inventoryitems = relationship("InventoryItem", secondary=inventoryitem_supplier_association, back_populates="suppliers")
     purchase_orders = relationship("PurchaseOrder", back_populates="supplier_ref")
     invoices = relationship("Invoice", back_populates="supplier_ref")
     __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_user_supplier_name'),)
 
-# --- CHANGED: The class 'Ingredient' is now correctly named 'InventoryItem' ---
 class InventoryItem(Base):
     __tablename__ = "inventoryitems"
     id = Column(Integer, primary_key=True, index=True)
@@ -157,7 +145,7 @@ class InventoryItem(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     user_ref = relationship("User", back_populates="inventoryitems")
-    inventoryitem_type_ref = relationship("IngredientType")
+    inventoryitem_type_ref = relationship("InventoryItemType")
     suppliers = relationship("Supplier", secondary=inventoryitem_supplier_association, back_populates="inventoryitems")
     stock_additions = relationship("StockAddition", back_populates="inventoryitem_ref", cascade="all, delete-orphan")
     batch_usages = relationship("BatchIngredientUsage", back_populates="inventoryitem_ref")
@@ -177,6 +165,8 @@ class PurchaseOrder(Base):
     supplier_ref = relationship("Supplier", foreign_keys=[supplier_id], back_populates="purchase_orders")
     line_items = relationship("StockAddition", back_populates="purchase_order_ref", cascade="all, delete-orphan")
     documents = relationship("PurchaseDocument", back_populates="purchase_order_ref", cascade="all, delete-orphan")
+    # --- ADDED: Relationship to the auto-generated transaction for this PO ---
+    transaction_ref = relationship("Transaction", back_populates="purchase_order_ref", uselist=False, cascade="all, delete-orphan")
 
 class PurchaseDocument(Base):
     __tablename__ = "purchase_documents"
@@ -197,15 +187,9 @@ class StockAddition(Base):
     supplier_lot_number = Column(String(255), nullable=True)
     quantity_remaining_grams = Column(Numeric(10, 3), nullable=False, default=Decimal('0.0'))
     vat_amount = Column(Numeric(10, 2), nullable=False, default=Decimal('0.0'))
-    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
     inventoryitem_ref = relationship("InventoryItem", back_populates="stock_additions")
     purchase_order_ref = relationship("PurchaseOrder", back_populates="line_items")
     batch_usages = relationship("BatchIngredientUsage", back_populates="stock_addition_ref")
-
-# ... (rest of the models are unchanged) ...
-# --- The rest of your models.py file follows here ---
-# (Employee, StandardProductionTask, etc. do not need changes)
-# I will include the full file for completeness
 
 class Employee(Base):
     __tablename__ = "employees"
@@ -298,7 +282,6 @@ class ProductMaterial(Base):
     inventoryitem_id = Column(Integer, ForeignKey("inventoryitems.id"), nullable=False)
     quantity_grams = Column(Numeric(10, 3), nullable=False)
     product_ref = relationship("Product", back_populates="materials")
-    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
     inventoryitem_ref = relationship("InventoryItem")
     __table_args__ = (UniqueConstraint('product_id', 'inventoryitem_id', name='uq_product_material_inventoryitem'),)
 
@@ -365,7 +348,6 @@ class BatchIngredientUsage(Base):
     inventoryitem_id = Column(Integer, ForeignKey("inventoryitems.id"), nullable=False)
     batch_record_ref = relationship("BatchRecord", back_populates="inventoryitem_usages")
     stock_addition_ref = relationship("StockAddition", back_populates="batch_usages")
-    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
     inventoryitem_ref = relationship("InventoryItem", back_populates="batch_usages")
 
 class BatchSafetyCheck(Base):
@@ -455,11 +437,16 @@ class Transaction(Base):
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
     invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    # --- ADDED: Foreign key to link directly to a Purchase Order ---
+    purchase_order_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=True)
+    
     user_ref = relationship("User", back_populates="transactions")
     category_ref = relationship("ExpenseCategory", foreign_keys=[category_id], back_populates="transactions")
     supplier_ref = relationship("Supplier", foreign_keys=[supplier_id])
     customer_ref = relationship("Customer", foreign_keys=[customer_id])
     invoice_ref = relationship("Invoice", foreign_keys=[invoice_id])
+    # --- ADDED: Relationship to get back to the Purchase Order ---
+    purchase_order_ref = relationship("PurchaseOrder", back_populates="transaction_ref")
     documents = relationship("TransactionDocument", back_populates="transaction_ref", cascade="all, delete-orphan")
 
 class TransactionDocument(Base):

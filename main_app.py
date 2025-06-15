@@ -107,8 +107,8 @@ def main():
 
                 menu_groups = {
                     "Setup & Configuration": [
-                        "Manage Ingredients", 
                         "Manage Inventory Item Types",
+                        "Manage Inventory Items", 
                         "Manage Suppliers", 
                         "Manage Employees", 
                         "Manage Tasks", 
@@ -147,8 +147,8 @@ def main():
             st.title(f"🧮 {active_page}")
 
             page_router = {
-                "Manage Ingredients": p1_manage_inventoryitems.render,
                 "Manage Inventory Item Types": p1b_manage_inventoryitem_types.render,
+                "Manage Inventory Items": p1_manage_inventoryitems.render,
                 "Manage Suppliers": p2_manage_suppliers.render,
                 "Manage Employees": p3_manage_employees.render,
                 "Manage Tasks": p4_manage_tasks.render,

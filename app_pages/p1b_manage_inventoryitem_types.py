@@ -8,18 +8,15 @@ import os
 
 # --- Boilerplate: Add project root to path ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from models import SessionLocal, User, IngredientType
+from models import SessionLocal, User, InventoryItemType
 
 def render(db: Session, user: User, is_mobile: bool):
-    """
-    This is the function that main_app.py calls to render this page.
-    """
     st.header("🏷️ Manage Inventory Item Types")
-    st.write("Define the categories for your inventoryitems (e.g., Oil, Additive, Lye). These will be used as dropdown options on the 'Manage Ingredients' page.")
+    st.write("Define the categories for your inventory items (e.g., Oil, Additive, Packaging). These will be used as dropdown options on the 'Manage Inventory' page.")
 
-    types_db = db.query(IngredientType).filter(IngredientType.user_id == user.id).order_by(IngredientType.name).all()
+    item_types_db = db.query(InventoryItemType).filter(InventoryItemType.user_id == user.id).order_by(InventoryItemType.name).all()
     
-    data_for_editor = [{"ID": t.id, "Type Name": t.name} for t in types_db]
+    data_for_editor = [{"ID": t.id, "Type Name": t.name} for t in item_types_db]
     df_for_editor = pd.DataFrame(data_for_editor)
 
     edited_df = st.data_editor(
@@ -37,9 +34,6 @@ def render(db: Session, user: User, is_mobile: bool):
     if st.button("Save Type Changes", type="primary"):
         with SessionLocal() as transaction_db:
             try:
-                # --- NEW: Intelligent Sync Logic ---
-
-                # 1. Get desired state from the UI, checking for duplicates first.
                 ui_type_names = set()
                 for _, row in edited_df.iterrows():
                     name_val = row.get("Type Name")
@@ -49,36 +43,29 @@ def render(db: Session, user: User, is_mobile: bool):
                             raise ValueError(f"The name '{clean_name}' is duplicated in your list.")
                         ui_type_names.add(clean_name)
 
-                # 2. Get current state from the database.
-                db_types = {t.name: t for t in transaction_db.query(IngredientType).filter(IngredientType.user_id == user.id).all()}
+                db_types = {t.name: t for t in transaction_db.query(InventoryItemType).filter(InventoryItemType.user_id == user.id).all()}
                 db_type_names = set(db_types.keys())
 
-                # 3. Determine what to add and what to delete.
                 names_to_add = ui_type_names - db_type_names
                 names_to_delete = db_type_names - ui_type_names
 
-                # 4. Perform deletions.
                 for name in names_to_delete:
                     transaction_db.delete(db_types[name])
 
-                # 5. Perform additions.
                 for name in names_to_add:
-                    transaction_db.add(IngredientType(user_id=user.id, name=name))
+                    transaction_db.add(InventoryItemType(user_id=user.id, name=name))
                 
-                # 6. Commit all changes.
                 transaction_db.commit()
-                st.success("Ingredient types saved successfully!")
+                st.success("Inventory Item Types saved successfully!")
 
             except ValueError as e:
-                # Catches the duplicate check from step 1.
                 transaction_db.rollback()
                 st.error(f"Save failed: {e}")
             except IntegrityError as e:
-                # --- NEW: Better error message for IntegrityError ---
                 transaction_db.rollback()
                 error_info = str(e.orig).lower()
                 if 'foreign key' in error_info:
-                    st.error("Save failed. You cannot delete a type that is currently in use by an inventoryitem. Please update your inventoryitems before deleting this type.")
+                    st.error("Save failed. You cannot delete a type that is currently in use by an inventory item. Please update your inventory items before deleting this type.")
                 elif 'unique constraint' in error_info or 'duplicate key' in error_info:
                     st.error("Save failed. Type names must be unique.")
                 else:
