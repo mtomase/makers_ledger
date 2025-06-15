@@ -26,7 +26,7 @@
 *Purpose: Define the precise recipe or bill of materials for **one single unit** of the selected product.*
 
 **How to Use:**
-- For each ingredient in one unit of the product, select it from the dropdown and enter the `Quantity (grams)*`.
+- For each inventory item in one unit of the product, select it from the dropdown and enter the `Quantity (grams)*`.
 - Click **"Save Materials for [Product Name]"**.
 
 *Significance: Directly determines the "Total Material Cost/Item" in the Cost Breakdown.*

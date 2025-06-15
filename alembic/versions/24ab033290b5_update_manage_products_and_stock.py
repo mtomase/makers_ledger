@@ -25,8 +25,8 @@ def upgrade() -> None:
     op.drop_table('product_shipping_tasks')
     op.drop_index(op.f('ix_product_materials_id'), table_name='product_materials')
     op.drop_table('product_materials')
-    op.drop_index(op.f('ix_batch_ingredient_usages_id'), table_name='batch_ingredient_usages')
-    op.drop_table('batch_ingredient_usages')
+    op.drop_index(op.f('ix_batch_inventoryitem_usages_id'), table_name='batch_inventoryitem_usages')
+    op.drop_table('batch_inventoryitem_usages')
     op.drop_index(op.f('ix_batch_safety_checks_id'), table_name='batch_safety_checks')
     op.drop_table('batch_safety_checks')
     op.drop_index(op.f('ix_standard_shipping_tasks_id'), table_name='standard_shipping_tasks')
@@ -69,7 +69,7 @@ def downgrade() -> None:
     op.create_table('production_run_components',
     sa.Column('id', sa.INTEGER(), autoincrement=True, nullable=False),
     sa.Column('production_run_id', sa.INTEGER(), autoincrement=False, nullable=False),
-    sa.Column('ingredient_id', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('inventoryitem_id', sa.INTEGER(), autoincrement=False, nullable=False),
     sa.Column('quantity_deducted_grams', sa.NUMERIC(precision=10, scale=3), autoincrement=False, nullable=False),
     sa.PrimaryKeyConstraint('id', name=op.f('production_run_components_pkey'))
     )
@@ -219,28 +219,28 @@ def downgrade() -> None:
     sa.UniqueConstraint('batch_record_id', 'check_name', name=op.f('uq_batch_safety_check'), postgresql_include=[], postgresql_nulls_not_distinct=False)
     )
     op.create_index(op.f('ix_batch_safety_checks_id'), 'batch_safety_checks', ['id'], unique=False)
-    op.create_table('batch_ingredient_usages',
+    op.create_table('batch_inventoryitem_usages',
     sa.Column('id', sa.INTEGER(), autoincrement=True, nullable=False),
     sa.Column('batch_record_id', sa.INTEGER(), autoincrement=False, nullable=False),
-    sa.Column('ingredient_id', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('inventoryitem_id', sa.INTEGER(), autoincrement=False, nullable=False),
     sa.Column('actual_weight_gr', sa.NUMERIC(precision=10, scale=2), autoincrement=False, nullable=True),
-    sa.Column('ingredient_brand', sa.VARCHAR(), autoincrement=False, nullable=True),
+    sa.Column('inventoryitem_brand', sa.VARCHAR(), autoincrement=False, nullable=True),
     sa.Column('supplier_lot_number', sa.VARCHAR(), autoincrement=False, nullable=True),
     sa.Column('measured_by_initials', sa.VARCHAR(length=5), autoincrement=False, nullable=True),
-    sa.ForeignKeyConstraint(['batch_record_id'], ['batch_records.id'], name=op.f('batch_ingredient_usages_batch_record_id_fkey')),
-    sa.ForeignKeyConstraint(['ingredient_id'], ['ingredients.id'], name=op.f('batch_ingredient_usages_ingredient_id_fkey')),
-    sa.PrimaryKeyConstraint('id', name=op.f('batch_ingredient_usages_pkey'))
+    sa.ForeignKeyConstraint(['batch_record_id'], ['batch_records.id'], name=op.f('batch_inventoryitem_usages_batch_record_id_fkey')),
+    sa.ForeignKeyConstraint(['inventoryitem_id'], ['inventoryitems.id'], name=op.f('batch_inventoryitem_usages_inventoryitem_id_fkey')),
+    sa.PrimaryKeyConstraint('id', name=op.f('batch_inventoryitem_usages_pkey'))
     )
-    op.create_index(op.f('ix_batch_ingredient_usages_id'), 'batch_ingredient_usages', ['id'], unique=False)
+    op.create_index(op.f('ix_batch_inventoryitem_usages_id'), 'batch_inventoryitem_usages', ['id'], unique=False)
     op.create_table('product_materials',
     sa.Column('id', sa.INTEGER(), autoincrement=True, nullable=False),
     sa.Column('product_id', sa.INTEGER(), autoincrement=False, nullable=False),
-    sa.Column('ingredient_id', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('inventoryitem_id', sa.INTEGER(), autoincrement=False, nullable=False),
     sa.Column('quantity_grams', sa.NUMERIC(precision=10, scale=3), autoincrement=False, nullable=False),
-    sa.ForeignKeyConstraint(['ingredient_id'], ['ingredients.id'], name=op.f('product_materials_ingredient_id_fkey')),
+    sa.ForeignKeyConstraint(['inventoryitem_id'], ['inventoryitems.id'], name=op.f('product_materials_inventoryitem_id_fkey')),
     sa.ForeignKeyConstraint(['product_id'], ['products.id'], name=op.f('product_materials_product_id_fkey')),
     sa.PrimaryKeyConstraint('id', name=op.f('product_materials_pkey')),
-    sa.UniqueConstraint('product_id', 'ingredient_id', name=op.f('uq_product_material_ingredient'), postgresql_include=[], postgresql_nulls_not_distinct=False)
+    sa.UniqueConstraint('product_id', 'inventoryitem_id', name=op.f('uq_product_material_inventoryitem'), postgresql_include=[], postgresql_nulls_not_distinct=False)
     )
     op.create_index(op.f('ix_product_materials_id'), 'product_materials', ['id'], unique=False)
     op.create_table('product_shipping_tasks',

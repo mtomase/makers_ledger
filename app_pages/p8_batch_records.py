@@ -29,7 +29,7 @@ def get_all_batch_records(db: Session, user_id: int):
     return db.query(BatchRecord).join(ProductionRun).filter(ProductionRun.user_id == user_id).options(joinedload(BatchRecord.production_run_ref).joinedload(ProductionRun.product_ref), joinedload(BatchRecord.person_responsible_ref)).order_by(BatchRecord.manufacturing_date.desc(), BatchRecord.batch_code.desc()).all()
 
 def get_full_batch_details(db: Session, batch_id: int):
-    return db.query(BatchRecord).options(joinedload(BatchRecord.production_run_ref).joinedload(ProductionRun.product_ref).selectinload(Product.materials).selectinload(ProductMaterial.ingredient_ref), joinedload(BatchRecord.production_run_ref).joinedload(ProductionRun.product_ref).selectinload(Product.production_tasks).selectinload(ProductProductionTask.standard_task_ref), joinedload(BatchRecord.production_run_ref).joinedload(ProductionRun.product_ref).selectinload(Product.production_tasks).selectinload(ProductProductionTask.employee_ref), selectinload(BatchRecord.ingredient_usages).joinedload(BatchIngredientUsage.stock_addition_ref).joinedload(StockAddition.purchase_order_ref), selectinload(BatchRecord.ingredient_usages).joinedload(BatchIngredientUsage.stock_addition_ref).joinedload(StockAddition.ingredient_ref), selectinload(BatchRecord.production_tasks).joinedload(BatchProductionTask.employee_ref), selectinload(BatchRecord.production_tasks).joinedload(BatchProductionTask.standard_task_ref), joinedload(BatchRecord.person_responsible_ref)).filter(BatchRecord.id == batch_id).first()
+    return db.query(BatchRecord).options(joinedload(BatchRecord.production_run_ref).joinedload(ProductionRun.product_ref).selectinload(Product.materials).selectinload(ProductMaterial.inventoryitem_ref), joinedload(BatchRecord.production_run_ref).joinedload(ProductionRun.product_ref).selectinload(Product.production_tasks).selectinload(ProductProductionTask.standard_task_ref), joinedload(BatchRecord.production_run_ref).joinedload(ProductionRun.product_ref).selectinload(Product.production_tasks).selectinload(ProductProductionTask.employee_ref), selectinload(BatchRecord.inventoryitem_usages).joinedload(BatchIngredientUsage.stock_addition_ref).joinedload(StockAddition.purchase_order_ref), selectinload(BatchRecord.inventoryitem_usages).joinedload(BatchIngredientUsage.stock_addition_ref).joinedload(StockAddition.inventoryitem_ref), selectinload(BatchRecord.production_tasks).joinedload(BatchProductionTask.employee_ref), selectinload(BatchRecord.production_tasks).joinedload(BatchProductionTask.standard_task_ref), joinedload(BatchRecord.person_responsible_ref)).filter(BatchRecord.id == batch_id).first()
 
 def generate_next_batch_code(db: Session, user_id: int, product_code: str | None) -> str:
     prefix_code = product_code if product_code and product_code.strip() else "PROD"
@@ -103,7 +103,7 @@ def render_batch_editor(db: Session, user: User):
 
     # --- Main Editor View ---
     st.subheader(f"📝 Editing Batch: {batch.batch_code}")
-    tab_main, tab_trace, tab_workflow = st.tabs(["Main Details", "🌿 Ingredient Traceability", "📋 Production Workflow"])
+    tab_main, tab_trace, tab_workflow = st.tabs(["Main Details", "🌿 Inventory Item Traceability", "📋 Production Workflow"])
     with tab_main:
         render_main_details_form(db, user, batch)
     with tab_trace:
@@ -161,29 +161,29 @@ def render_traceability_section(db: Session, user: User, batch: BatchRecord):
     # Unchanged
     product_recipe = batch.production_run_ref.product_ref.materials
     if not product_recipe: st.warning("This product has no recipe defined. Please add materials on the 'Manage Products' page."); return
-    usage_summary = {m.ingredient_id: {"name": m.ingredient_ref.name, "required": m.quantity_grams, "used": Decimal("0.0")} for m in product_recipe}
-    for usage in batch.ingredient_usages:
-        if usage.ingredient_id in usage_summary: usage_summary[usage.ingredient_id]["used"] += usage.quantity_used_grams
+    usage_summary = {m.inventoryitem_id: {"name": m.inventoryitem_ref.name, "required": m.quantity_grams, "used": Decimal("0.0")} for m in product_recipe}
+    for usage in batch.inventoryitem_usages:
+        if usage.inventoryitem_id in usage_summary: usage_summary[usage.inventoryitem_id]["used"] += usage.quantity_used_grams
     summary_data = [{"Ingredient": v["name"], "Required (g)": f"{v['required']:.2f}", "Used (g)": f"{v['used']:.2f}", "Status": "✅" if v['used'] >= v['required'] else "⏳"} for k, v in usage_summary.items()]
     st.dataframe(summary_data, hide_index=True, use_container_width=True)
     st.markdown("---")
     for material in product_recipe:
-        with st.expander(f"Allocate **{material.ingredient_ref.name}** (Required: {material.quantity_grams:.2f}g)"):
-            required_qty, used_qty = usage_summary[material.ingredient_id]['required'], usage_summary[material.ingredient_id]['used']
+        with st.expander(f"Allocate **{material.inventoryitem_ref.name}** (Required: {material.quantity_grams:.2f}g)"):
+            required_qty, used_qty = usage_summary[material.inventoryitem_id]['required'], usage_summary[material.inventoryitem_id]['used']
             remaining_needed = max(Decimal("0.0"), required_qty - used_qty)
             st.write("**Current Allocations for this Ingredient:**")
-            current_usages_for_ingredient = [u for u in batch.ingredient_usages if u.ingredient_id == material.ingredient_id]
-            if not current_usages_for_ingredient: st.write("_None_")
+            current_usages_for_inventoryitem = [u for u in batch.inventoryitem_usages if u.inventoryitem_id == material.inventoryitem_id]
+            if not current_usages_for_inventoryitem: st.write("_None_")
             else:
-                for usage in current_usages_for_ingredient:
+                for usage in current_usages_for_inventoryitem:
                     st.info(f"Used **{usage.quantity_used_grams:.2f}g** from Lot #**{usage.stock_addition_ref.supplier_lot_number or 'N/A'}** (Purchased: {usage.stock_addition_ref.purchase_order_ref.order_date})")
             st.markdown("---")
-            if remaining_needed <= 0: st.success(f"✅ Requirement for {material.ingredient_ref.name} has been met.")
+            if remaining_needed <= 0: st.success(f"✅ Requirement for {material.inventoryitem_ref.name} has been met.")
             else:
                 st.write("**Add New Allocation**")
-                available_stock = db.query(StockAddition).join(PurchaseOrder).filter(PurchaseOrder.user_id == user.id, StockAddition.ingredient_id == material.ingredient_id, StockAddition.quantity_remaining_grams > 0).order_by(PurchaseOrder.order_date).all()
-                if not available_stock: st.warning(f"No stock available for {material.ingredient_ref.name}. Please add a purchase on the 'Stock Management' page."); continue
-                with st.form(key=f"form_alloc_{material.ingredient_id}"):
+                available_stock = db.query(StockAddition).join(PurchaseOrder).filter(PurchaseOrder.user_id == user.id, StockAddition.inventoryitem_id == material.inventoryitem_id, StockAddition.quantity_remaining_grams > 0).order_by(PurchaseOrder.order_date).all()
+                if not available_stock: st.warning(f"No stock available for {material.inventoryitem_ref.name}. Please add a purchase on the 'Stock Management' page."); continue
+                with st.form(key=f"form_alloc_{material.inventoryitem_id}"):
                     lot_options = {f"Lot #{s.supplier_lot_number or 'N/A'} (Rem: {s.quantity_remaining_grams:.2f}g, Date: {s.purchase_order_ref.order_date})": s.id for s in available_stock}
                     selected_lot_str = st.selectbox("Select Stock Lot", options=lot_options.keys())
                     selected_stock_id = lot_options.get(selected_lot_str)
@@ -198,7 +198,7 @@ def render_traceability_section(db: Session, user: User, batch: BatchRecord):
                                 if Decimal(str(qty_to_use)) > stock_to_update.quantity_remaining_grams:
                                     st.error("Cannot use more than the remaining quantity in the selected lot."); transaction_db.rollback()
                                 else:
-                                    new_usage = BatchIngredientUsage(batch_record_id=batch.id, stock_addition_id=selected_stock_id, ingredient_id=material.ingredient_id, quantity_used_grams=Decimal(str(qty_to_use)))
+                                    new_usage = BatchIngredientUsage(batch_record_id=batch.id, stock_addition_id=selected_stock_id, inventoryitem_id=material.inventoryitem_id, quantity_used_grams=Decimal(str(qty_to_use)))
                                     transaction_db.add(new_usage)
                                     stock_to_update.quantity_remaining_grams -= Decimal(str(qty_to_use)); transaction_db.commit()
                                     st.success("Allocation saved!"); st.rerun()

@@ -1,4 +1,4 @@
-# app_pages/p1b_manage_ingredient_types.py
+# app_pages/p1b_manage_inventoryitem_types.py
 import streamlit as st
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -14,8 +14,8 @@ def render(db: Session, user: User, is_mobile: bool):
     """
     This is the function that main_app.py calls to render this page.
     """
-    st.header("🏷️ Manage Ingredient Types")
-    st.write("Define the categories for your ingredients (e.g., Oil, Additive, Lye). These will be used as dropdown options on the 'Manage Ingredients' page.")
+    st.header("🏷️ Manage Inventory Item Types")
+    st.write("Define the categories for your inventoryitems (e.g., Oil, Additive, Lye). These will be used as dropdown options on the 'Manage Ingredients' page.")
 
     types_db = db.query(IngredientType).filter(IngredientType.user_id == user.id).order_by(IngredientType.name).all()
     
@@ -25,7 +25,7 @@ def render(db: Session, user: User, is_mobile: bool):
     edited_df = st.data_editor(
         df_for_editor,
         num_rows="dynamic",
-        key="ingredient_types_editor",
+        key="inventoryitem_types_editor",
         column_config={
             "ID": None,
             "Type Name": st.column_config.TextColumn("Type Name*", required=True),
@@ -78,7 +78,7 @@ def render(db: Session, user: User, is_mobile: bool):
                 transaction_db.rollback()
                 error_info = str(e.orig).lower()
                 if 'foreign key' in error_info:
-                    st.error("Save failed. You cannot delete a type that is currently in use by an ingredient. Please update your ingredients before deleting this type.")
+                    st.error("Save failed. You cannot delete a type that is currently in use by an inventoryitem. Please update your inventoryitems before deleting this type.")
                 elif 'unique constraint' in error_info or 'duplicate key' in error_info:
                     st.error("Save failed. Type names must be unique.")
                 else:

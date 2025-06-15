@@ -14,9 +14,9 @@ class UserBoundModel(Protocol):
 # fulfills the UserBoundModel contract.
 T = TypeVar('T', bound=UserBoundModel)
 
-def create_ingredient_display_string(name: str, provider: str = None) -> str:
+def create_inventoryitem_display_string(name: str, provider: str = None) -> str:
     """
-    Creates a standardized display string for an ingredient, including the provider if available.
+    Creates a standardized display string for an inventoryitem, including the provider if available.
     Example: "Flour (King Arthur)" or "Sugar"
     """
     if provider:

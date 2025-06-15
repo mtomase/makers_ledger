@@ -11,15 +11,14 @@ import os
 # --- Boilerplate: Add project root to path ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models import (
-    SessionLocal, User, Product, Ingredient, ProductMaterial, GlobalCosts, GlobalSalary,
+    SessionLocal, User, Product, InventoryItem, ProductMaterial, GlobalCosts, GlobalSalary,
     Employee, StandardProductionTask, ProductProductionTask, StockAddition, PurchaseOrder
 )
 
-# --- REBUILT Cost Calculation Logic (from old app) ---
+# --- REBUILT Cost Calculation Logic ---
 def calculate_full_costs(product_id: int, db: Session, user_id: int):
-    # Assuming Product model has 'shipping_tasks' relationship. If not, this line can be removed.
     product = db.query(Product).options(
-        selectinload(Product.materials).joinedload(ProductMaterial.ingredient_ref),
+        selectinload(Product.materials).joinedload(ProductMaterial.inventoryitem_ref),
         selectinload(Product.production_tasks).joinedload(ProductProductionTask.standard_task_ref),
         selectinload(Product.production_tasks).joinedload(ProductProductionTask.employee_ref),
         selectinload(Product.shipping_tasks),
@@ -30,41 +29,44 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
 
     breakdown = {}
     
-    # Material Cost
+    # --- CHANGED: Material Cost now INCLUDES packaging ---
+    # The logic here is now simpler and more powerful. It treats ingredients and packaging identically.
     material_cost_per_item = Decimal('0.0')
-    missing_ingredient_costs = []
+    missing_inventoryitem_costs = []
     material_details = []
     if product.materials:
         for material in product.materials:
+            # 'material' is now a generic term for any item in the Bill of Materials
             additions = db.query(StockAddition).join(PurchaseOrder).filter(
-                StockAddition.ingredient_id == material.ingredient_id,
+                StockAddition.inventoryitem_id == material.inventoryitem_id,
                 PurchaseOrder.user_id == user_id
             ).all()
             if not additions:
-                missing_ingredient_costs.append(material.ingredient_ref.name)
+                missing_inventoryitem_costs.append(material.inventoryitem_ref.name)
                 continue
-            total_cost_for_ingredient = Decimal('0.0')
-            total_grams_for_ingredient = Decimal('0.0')
+            total_cost_for_inventoryitem = Decimal('0.0')
+            total_grams_for_inventoryitem = Decimal('0.0') # Note: For packaging, this might represent "units"
             for add in additions:
                 total_items_in_po = db.query(func.count(StockAddition.id)).filter(StockAddition.purchase_order_id == add.purchase_order_id).scalar()
                 shipping_per_item = add.purchase_order_ref.shipping_cost / total_items_in_po if total_items_in_po > 0 else Decimal('0.0')
                 true_cost_of_addition = add.item_cost + shipping_per_item
-                total_cost_for_ingredient += true_cost_of_addition
-                total_grams_for_ingredient += add.quantity_added_grams
+                total_cost_for_inventoryitem += true_cost_of_addition
+                total_grams_for_inventoryitem += add.quantity_added_grams
             
-            if total_grams_for_ingredient > 0:
-                avg_cost_per_gram = total_cost_for_ingredient / total_grams_for_ingredient
+            if total_grams_for_inventoryitem > 0:
+                avg_cost_per_gram = total_cost_for_inventoryitem / total_grams_for_inventoryitem
                 cost_for_material = material.quantity_grams * avg_cost_per_gram
                 material_cost_per_item += cost_for_material
-                material_details.append({"Ingredient": material.ingredient_ref.name, "Qty (g)": material.quantity_grams, "Cost": cost_for_material})
+                # --- CHANGED: Renamed "Ingredient" to "Item" for clarity
+                material_details.append({"Item": material.inventoryitem_ref.name, "Qty": material.quantity_grams, "Cost": cost_for_material})
             else:
-                missing_ingredient_costs.append(material.ingredient_ref.name)
+                missing_inventoryitem_costs.append(material.inventoryitem_ref.name)
     
     breakdown['material_details'] = material_details
     breakdown['total_material_cost_per_item'] = material_cost_per_item
-    breakdown['missing_ingredient_costs'] = missing_ingredient_costs
+    breakdown['missing_inventoryitem_costs'] = missing_inventoryitem_costs
 
-    # Labor Cost
+    # Labor Cost (No change needed here)
     labor_cost_per_item = Decimal('0.0')
     labor_details = []
     for p_task in product.production_tasks:
@@ -76,7 +78,7 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
     breakdown['labor_details'] = labor_details
     breakdown['total_labor_cost_per_item'] = labor_cost_per_item
 
-    # Overhead Cost
+    # Overhead Cost (No change needed here)
     allocated_salary_cost_per_item = Decimal('0.0')
     if product.salary_allocation_employee_id and product.salary_alloc_employee_ref and product.salary_alloc_employee_ref.global_salary_entry:
         monthly_salary = product.salary_alloc_employee_ref.global_salary_entry.monthly_amount or Decimal('0.0')
@@ -96,18 +98,14 @@ def calculate_full_costs(product_id: int, db: Session, user_id: int):
     breakdown['allocated_rent_utilities_cost_per_item'] = allocated_rent_utilities_cost_per_item
     breakdown['total_allocated_overheads_per_item'] = allocated_salary_cost_per_item + allocated_rent_utilities_cost_per_item
 
-    # Packaging Cost
-    pkg_label_cost = product.packaging_label_cost or Decimal('0.0')
-    pkg_material_cost = product.packaging_material_cost or Decimal('0.0')
-    breakdown['packaging_label_cost_per_item'] = pkg_label_cost
-    breakdown['packaging_material_cost_per_item'] = pkg_material_cost
-    breakdown['total_packaging_cost_per_item'] = pkg_label_cost + pkg_material_cost
+    # --- REMOVED: Standalone Packaging Cost section ---
+    # This is now calculated as part of the material cost.
 
-    # Total Production Cost
-    total_production_cost = material_cost_per_item + labor_cost_per_item + breakdown['total_allocated_overheads_per_item'] + breakdown['total_packaging_cost_per_item']
+    # --- CHANGED: Total Production Cost calculation is now simpler ---
+    total_production_cost = material_cost_per_item + labor_cost_per_item + breakdown['total_allocated_overheads_per_item']
     breakdown['total_production_cost_per_item'] = total_production_cost
     
-    # Channel Costs & Profitability
+    # Channel Costs & Profitability (No change needed here)
     retail_price = product.retail_price_per_item or Decimal('0.0')
     retail_cc_fee = retail_price * (product.retail_cc_fee_percent or Decimal('0.0'))
     retail_platform_fee = retail_price * (product.retail_platform_fee_percent or Decimal('0.0'))
@@ -170,26 +168,28 @@ def render_new_product_form(user: User):
 def render_product_editor(db: Session, user: User, product: Product, is_mobile: bool):
     st.header(f"⚙️ Editing: {product.product_name}")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["Recipe", "Workflow", "Pricing & Channels", "Cost Analysis"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Bill of Materials", "Workflow", "Pricing & Channels", "Cost Analysis"])
 
     with tab1:
-        st.subheader("Product Recipe / Bill of Materials")
-        all_ingredients = db.query(Ingredient).filter(Ingredient.user_id == user.id).order_by(Ingredient.name).all()
+        st.subheader("Bill of Materials")
+        # --- CHANGED: This now fetches ALL inventory items, including packaging
+        all_inventoryitems = db.query(InventoryItem).filter(InventoryItem.user_id == user.id).order_by(InventoryItem.name).all()
         
-        # --- ROBUST FIX: Check for prerequisites ---
-        prerequisites_met_recipe = bool(all_ingredients)
+        prerequisites_met_recipe = bool(all_inventoryitems)
         
         if not prerequisites_met_recipe:
-            st.warning("No ingredients found. Please add ingredients first on the 'Manage Ingredients' page to create a recipe.")
+            # --- CHANGED: Updated help text
+            st.warning("No inventory items found. Please add items (i.e. ingredients, packaging, etc... on the 'Manage Inventory' page to create a bill of materials.")
 
-        # --- ROBUST FIX: Always create the DataFrame with the correct columns ---
+        # --- CHANGED: More generic column names
         df_recipe_columns = {
-            "ID": [], "Ingredient": [], "Quantity (g)": []
+            "ID": [], "Item": [], "Quantity": []
         }
         
         recipe_data = []
         if product.materials:
-            recipe_data = [{"ID": m.id, "Ingredient": m.ingredient_ref.name, "Quantity (g)": m.quantity_grams} for m in product.materials]
+            # --- CHANGED: More generic column names
+            recipe_data = [{"ID": m.id, "Item": m.inventoryitem_ref.name, "Quantity (grams for ingredients /units for packaging)": m.quantity_grams} for m in product.materials]
         
         df_recipe = pd.DataFrame(recipe_data if recipe_data else df_recipe_columns)
 
@@ -200,28 +200,30 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
             disabled=not prerequisites_met_recipe,
             column_config={
                 "ID": None,
-                "Ingredient": st.column_config.SelectboxColumn("Ingredient*", options=[ing.name for ing in all_ingredients], required=True),
-                "Quantity (g)": st.column_config.NumberColumn("Quantity (g)*", required=True, min_value=0.0, format="%.3f")
+                # --- CHANGED: More generic column names and options
+                "Item": st.column_config.SelectboxColumn("Item*", options=[ing.name for ing in all_inventoryitems], required=True),
+                "Quantity": st.column_config.NumberColumn("Quantity*", help="For ingredients, use grams. For packaging, use units (e.g., 1 for one box).", required=True, min_value=0.0, format="%.3f")
             }, 
             use_container_width=True, 
             hide_index=True
         )
         
-        if st.button("💾 Save Recipe Changes", type="primary", disabled=not prerequisites_met_recipe):
+        if st.button("💾 Save Changes", type="primary", disabled=not prerequisites_met_recipe):
             with SessionLocal() as transaction_db:
                 try:
                     transaction_db.query(ProductMaterial).filter(ProductMaterial.product_id == product.id).delete(synchronize_session=False)
-                    ing_map = {ing.name: ing.id for ing in all_ingredients}
+                    ing_map = {ing.name: ing.id for ing in all_inventoryitems}
                     for _, row in edited_recipe_df.iterrows():
-                        ing_name, quantity = row["Ingredient"], row["Quantity (g)"]
-                        if not ing_name or pd.isna(quantity) or quantity <= 0: continue
-                        ing_id = ing_map.get(ing_name)
+                        # --- CHANGED: More generic variable names
+                        item_name, quantity = row["Item"], row["Quantity"]
+                        if not item_name or pd.isna(quantity) or quantity <= 0: continue
+                        ing_id = ing_map.get(item_name)
                         if ing_id:
-                            transaction_db.add(ProductMaterial(product_id=product.id, ingredient_id=ing_id, quantity_grams=Decimal(str(quantity))))
+                            transaction_db.add(ProductMaterial(product_id=product.id, inventoryitem_id=ing_id, quantity_grams=Decimal(str(quantity))))
                     transaction_db.commit()
-                    st.success("Recipe updated successfully!")
+                    st.success("BOM updated successfully!")
                 except Exception as e:
-                    transaction_db.rollback(); st.error(f"Error saving recipe: {e}")
+                    transaction_db.rollback(); st.error(f"Error saving BOM: {e}")
             st.rerun()
 
     with tab2:
@@ -287,7 +289,7 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
             st.rerun()
 
     with tab3:
-        st.subheader("Pricing, Packaging, Overheads & Channels")
+        st.subheader("Pricing, Overheads & Channels") # --- CHANGED: Removed "Packaging" from title
         with st.form("pricing_form"):
             st.markdown("#### Pricing Strategy")
             c1, c2, c3 = st.columns(3)
@@ -295,11 +297,8 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
             wholesale_price = c2.number_input("Wholesale Price/Item (€)", value=float(product.wholesale_price_per_item or 0.0), format="%.2f")
             buffer = c3.slider("Profit Buffer (%)", 0, 200, int((product.buffer_percentage or 0)*100), format="%d%%")
             
-            st.markdown("#### Packaging Costs (per Item)")
-            c1, c2 = st.columns(2)
-            label_cost = c1.number_input("Label Cost/Item (€)", value=float(product.packaging_label_cost or 0.0), format="%.3f")
-            pkg_cost = c2.number_input("Other Packaging Cost/Item (€)", value=float(product.packaging_material_cost or 0.0), format="%.3f")
-
+            # --- REMOVED: The entire "Packaging Costs" section is gone from the UI.
+            
             st.markdown("#### Overhead Allocation")
             all_salaried_employees = db.query(Employee).join(GlobalSalary).filter(Employee.user_id==user.id).all()
             salaried_emp_options = {emp.id: emp.name for emp in all_salaried_employees}
@@ -331,8 +330,9 @@ def render_product_editor(db: Session, user: User, product: Product, is_mobile: 
                     p_to_update.retail_price_per_item = Decimal(str(retail_price))
                     p_to_update.wholesale_price_per_item = Decimal(str(wholesale_price))
                     p_to_update.buffer_percentage = Decimal(buffer) / 100
-                    p_to_update.packaging_label_cost = Decimal(str(label_cost))
-                    p_to_update.packaging_material_cost = Decimal(str(pkg_cost))
+                    # --- REMOVED: Obsolete fields are no longer updated.
+                    # p_to_update.packaging_label_cost = Decimal(str(label_cost))
+                    # p_to_update.packaging_material_cost = Decimal(str(pkg_cost))
                     p_to_update.salary_allocation_employee_id = selected_sal_emp_id
                     p_to_update.salary_allocation_items_per_month = sal_alloc_items
                     p_to_update.rent_utilities_allocation_items_per_month = rent_alloc_items
@@ -358,8 +358,9 @@ def render_cost_analysis(db: Session, user: User, product: Product, is_mobile: b
     if cost_data is None: 
         st.error("An error occurred during cost calculation.")
         return
-    if cost_data["missing_ingredient_costs"]:
-        st.warning(f"Could not calculate full material cost. Please record a purchase for these ingredients: {', '.join(cost_data['missing_ingredient_costs'])}")
+    if cost_data["missing_inventoryitem_costs"]:
+        # --- CHANGED: More generic help text
+        st.warning(f"Could not calculate full material cost. Please record a purchase for these inventory items: {', '.join(cost_data['missing_inventoryitem_costs'])}")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Prod. Cost/Item", f"€{cost_data['total_production_cost_per_item']:.2f}")
@@ -389,7 +390,7 @@ def render_cost_analysis(db: Session, user: User, product: Product, is_mobile: b
 # --- Main Page Render Function ---
 def render(db: Session, user: User, is_mobile: bool):
     st.header("📦 Product Management")
-    st.write("Create new products or select an existing one to manage its recipe, workflow, and costs.")
+    st.write("Create new products or select an existing one to manage its bill of materials, workflow, and costs.")
 
     products = db.query(Product).filter(Product.user_id == user.id).order_by(Product.product_name).all()
     product_names = [p.product_name for p in products]
@@ -413,7 +414,7 @@ def render(db: Session, user: User, is_mobile: bool):
         render_new_product_form(user)
     elif selected_product_name:
         product = db.query(Product).options(
-            selectinload(Product.materials).joinedload(ProductMaterial.ingredient_ref),
+            selectinload(Product.materials).joinedload(ProductMaterial.inventoryitem_ref),
             selectinload(Product.production_tasks).joinedload(ProductProductionTask.standard_task_ref),
             selectinload(Product.production_tasks).joinedload(ProductProductionTask.employee_ref)
         ).filter(Product.product_name == selected_product_name, Product.user_id == user.id).first()

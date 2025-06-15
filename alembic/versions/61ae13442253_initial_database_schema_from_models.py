@@ -16,7 +16,7 @@ branch_labels = None
 depends_on = None
 
 # Define the ENUM types for clarity
-ingredient_type_enum = sa.Enum('OIL_FAT_BUTTER', 'ADDITIVE', 'LYE', 'LIQUID', name='ingredient_type_enum')
+inventoryitem_type_enum = sa.Enum('OIL_FAT_BUTTER', 'ADDITIVE', 'LYE', 'LIQUID', name='inventoryitem_type_enum')
 safety_check_status_enum = sa.Enum('DONE', 'NOT_DONE', 'NOT_APPLICABLE', name='safety_check_status_enum')
 user_layout_enum = sa.Enum('WIDE', 'CENTERED', name='user_layout_enum_def')
 
@@ -69,11 +69,11 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_global_costs_id'), 'global_costs', ['id'], unique=False)
 
-    op.create_table('ingredients',
+    op.create_table('inventoryitems',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('user_id', sa.Integer(), nullable=False),
         sa.Column('name', sa.String(), nullable=False),
-        sa.Column('type', ingredient_type_enum, nullable=False),
+        sa.Column('type', inventoryitem_type_enum, nullable=False),
         sa.Column('provider', sa.String(), nullable=True),
         sa.Column('price_per_unit', sa.Numeric(precision=10, scale=2), nullable=False),
         sa.Column('unit_quantity_kg', sa.Numeric(precision=10, scale=3), nullable=False),
@@ -84,9 +84,9 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
         sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('user_id', 'name', 'provider', name='uq_user_ingredient_provider')
+        sa.UniqueConstraint('user_id', 'name', 'provider', name='uq_user_inventoryitem_provider')
     )
-    op.create_index(op.f('ix_ingredients_id'), 'ingredients', ['id'], unique=False)
+    op.create_index(op.f('ix_inventoryitems_id'), 'inventoryitems', ['id'], unique=False)
 
     op.create_table('standard_production_tasks',
         sa.Column('id', sa.Integer(), nullable=False),
@@ -156,13 +156,13 @@ def upgrade() -> None:
     op.create_table('stock_additions',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('user_id', sa.Integer(), nullable=False),
-        sa.Column('ingredient_id', sa.Integer(), nullable=False),
+        sa.Column('inventoryitem_id', sa.Integer(), nullable=False),
         sa.Column('quantity_added_grams', sa.Numeric(precision=10, scale=3), nullable=False),
         sa.Column('purchase_date', sa.Date(), nullable=False),
         sa.Column('cost_of_addition', sa.Numeric(precision=10, scale=2), nullable=True),
         sa.Column('supplier_info', sa.String(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
-        sa.ForeignKeyConstraint(['ingredient_id'], ['ingredients.id'], ),
+        sa.ForeignKeyConstraint(['inventoryitem_id'], ['inventoryitems.id'], ),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
         sa.PrimaryKeyConstraint('id')
     )
@@ -171,12 +171,12 @@ def upgrade() -> None:
     op.create_table('product_materials',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('product_id', sa.Integer(), nullable=False),
-        sa.Column('ingredient_id', sa.Integer(), nullable=False),
+        sa.Column('inventoryitem_id', sa.Integer(), nullable=False),
         sa.Column('quantity_grams', sa.Numeric(precision=10, scale=3), nullable=False),
-        sa.ForeignKeyConstraint(['ingredient_id'], ['ingredients.id'], ),
+        sa.ForeignKeyConstraint(['inventoryitem_id'], ['inventoryitems.id'], ),
         sa.ForeignKeyConstraint(['product_id'], ['products.id'], ),
         sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('product_id', 'ingredient_id', name='uq_product_material_ingredient')
+        sa.UniqueConstraint('product_id', 'inventoryitem_id', name='uq_product_material_inventoryitem')
     )
     op.create_index(op.f('ix_product_materials_id'), 'product_materials', ['id'], unique=False)
 
@@ -254,19 +254,19 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_batch_records_id'), 'batch_records', ['id'], unique=False)
 
-    op.create_table('batch_ingredient_usages',
+    op.create_table('batch_inventoryitem_usages',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('batch_record_id', sa.Integer(), nullable=False),
-        sa.Column('ingredient_id', sa.Integer(), nullable=False),
+        sa.Column('inventoryitem_id', sa.Integer(), nullable=False),
         sa.Column('actual_weight_gr', sa.Numeric(precision=10, scale=2), nullable=True),
-        sa.Column('ingredient_brand', sa.String(), nullable=True),
+        sa.Column('inventoryitem_brand', sa.String(), nullable=True),
         sa.Column('supplier_lot_number', sa.String(), nullable=True),
         sa.Column('measured_by_initials', sa.String(length=5), nullable=True),
         sa.ForeignKeyConstraint(['batch_record_id'], ['batch_records.id'], ),
-        sa.ForeignKeyConstraint(['ingredient_id'], ['ingredients.id'], ),
+        sa.ForeignKeyConstraint(['inventoryitem_id'], ['inventoryitems.id'], ),
         sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_batch_ingredient_usages_id'), 'batch_ingredient_usages', ['id'], unique=False)
+    op.create_index(op.f('ix_batch_inventoryitem_usages_id'), 'batch_inventoryitem_usages', ['id'], unique=False)
 
     op.create_table('batch_safety_checks',
         sa.Column('id', sa.Integer(), nullable=False),
@@ -285,8 +285,8 @@ def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_index(op.f('ix_batch_safety_checks_id'), table_name='batch_safety_checks')
     op.drop_table('batch_safety_checks')
-    op.drop_index(op.f('ix_batch_ingredient_usages_id'), table_name='batch_ingredient_usages')
-    op.drop_table('batch_ingredient_usages')
+    op.drop_index(op.f('ix_batch_inventoryitem_usages_id'), table_name='batch_inventoryitem_usages')
+    op.drop_table('batch_inventoryitem_usages')
     op.drop_index(op.f('ix_batch_records_id'), table_name='batch_records')
     op.drop_table('batch_records')
     op.drop_index(op.f('ix_production_runs_id'), table_name='production_runs')
@@ -307,8 +307,8 @@ def downgrade() -> None:
     op.drop_table('standard_shipping_tasks')
     op.drop_index(op.f('ix_standard_production_tasks_id'), table_name='standard_production_tasks')
     op.drop_table('standard_production_tasks')
-    op.drop_index(op.f('ix_ingredients_id'), table_name='ingredients')
-    op.drop_table('ingredients')
+    op.drop_index(op.f('ix_inventoryitems_id'), table_name='inventoryitems')
+    op.drop_table('inventoryitems')
     op.drop_index(op.f('ix_global_costs_id'), table_name='global_costs')
     op.drop_table('global_costs')
     op.drop_index(op.f('ix_employees_id'), table_name='employees')
@@ -319,7 +319,7 @@ def downgrade() -> None:
     op.drop_table('users')
 
     # Manually drop the ENUM types
-    ingredient_type_enum.drop(op.get_bind(), checkfirst=True)
+    inventoryitem_type_enum.drop(op.get_bind(), checkfirst=True)
     safety_check_status_enum.drop(op.get_bind(), checkfirst=True)
     user_layout_enum.drop(op.get_bind(), checkfirst=True)
     # ### end Alembic commands ###

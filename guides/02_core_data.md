@@ -1,19 +1,19 @@
 ### Manage Ingredients
 *Purpose: This section is for tracking all your raw materials, their purchase costs, and suppliers. This data is the absolute foundation for calculating the material costs that go into each of your products.*
 
-*Concept: Ingredients are the direct physical components of your products. To accurately determine how much it costs to make a product, you first need to know the precise cost of each ingredient per standardized unit (e.g., cost per gram or per kilogram). This allows for consistent costing even if you buy ingredients in various bulk sizes.*
+*Concept: Ingredients are the direct physical components of your products. To accurately determine how much it costs to make a product, you first need to know the precise cost of each inventory item per standardized unit (e.g., cost per gram or per kilogram). This allows for consistent costing even if you buy inventoryitems in various bulk sizes.*
 
 **How to Use:**
-- The table displays your current list of ingredients.
+- The table displays your current list of inventoryitems.
 - **To Add a New Ingredient:** Click the `+ Add row` button at the bottom of the data editor. A new, empty row will appear for you to fill in.
-- **To Edit an Existing Ingredient:** Simply click directly into any cell of an existing ingredient's row and modify its value.
+- **To Edit an Existing Ingredient:** Simply click directly into any cell of an existing inventoryitem's row and modify its value.
 - **To Delete an Ingredient:** Click the trash can icon (`🗑️`) located at the end of the row you wish to remove.
-- **Important:** After making any changes, you **MUST** click the **"Save Ingredient Changes"** button located below the table to make your modifications permanent.
+- **Important:** After making any changes, you **MUST** click the **"Save Inventory Item Changes"** button located below the table to make your modifications permanent.
 
 **Key Fields & Concepts:**
 - `Ingredient Name*`: A clear, descriptive name for the raw material (e.g., "Organic Cocoa Butter"). *Required.*
-- `Provider (Optional)`: The supplier or source of the ingredient.
-- `Price per Unit (€)*`: The price you pay for a specific quantity of the ingredient (e.g., €10 for a 5kg bag). *Required.*
+- `Provider (Optional)`: The supplier or source of the inventoryitem.
+- `Price per Unit (€)*`: The price you pay for a specific quantity of the inventory item (e.g., €10 for a 5kg bag). *Required.*
 - `Unit Quantity (kg)*`: The amount, **in kilograms**, that the `Price per Unit` refers to. This is crucial for standardizing costs.
     - *Example 1:* If you buy a 5kg bag of flour for €10, enter `5.000` here.
     - *Example 2:* If you buy a 250g jar of spice for €3, you would enter `0.250` here.

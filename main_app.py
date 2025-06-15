@@ -12,8 +12,8 @@ from models import get_db, User, SessionLocal, UserLayoutEnumDef
 
 # --- Page Imports ---
 from app_pages import (
-    p1_manage_ingredients,
-    p1b_manage_ingredient_types,
+    p1_manage_inventoryitems,
+    p1b_manage_inventoryitem_types,
     p2_manage_suppliers,
     p3_manage_employees,
     p4_manage_tasks,
@@ -108,7 +108,7 @@ def main():
                 menu_groups = {
                     "Setup & Configuration": [
                         "Manage Ingredients", 
-                        "Manage Ingredient Types",
+                        "Manage Inventory Item Types",
                         "Manage Suppliers", 
                         "Manage Employees", 
                         "Manage Tasks", 
@@ -147,8 +147,8 @@ def main():
             st.title(f"🧮 {active_page}")
 
             page_router = {
-                "Manage Ingredients": p1_manage_ingredients.render,
-                "Manage Ingredient Types": p1b_manage_ingredient_types.render,
+                "Manage Ingredients": p1_manage_inventoryitems.render,
+                "Manage Inventory Item Types": p1b_manage_inventoryitem_types.render,
                 "Manage Suppliers": p2_manage_suppliers.render,
                 "Manage Employees": p3_manage_employees.render,
                 "Manage Tasks": p4_manage_tasks.render,

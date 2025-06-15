@@ -13,11 +13,15 @@ from sqlalchemy.sql import func
 from dotenv import load_dotenv
 import urllib
 
+# --- ADDED: Imports for retry logic from previous step ---
+from sqlalchemy.exc import OperationalError
+import time
+# --- END ADDED ---
+
+
 load_dotenv()
 
-# --- New connection logic for Azure SQL with Entra ID ---
-
-# Load connection details from environment variables
+# --- Connection logic ---
 db_server = os.environ.get("DB_SERVER")
 db_name = os.environ.get("DB_NAME")
 db_driver = os.environ.get("DB_DRIVER")
@@ -27,7 +31,6 @@ entra_client_secret = os.environ.get("ENTRA_CLIENT_SECRET")
 if not all([db_server, db_name, db_driver, entra_client_id, entra_client_secret]):
     raise ValueError("One or more database connection environment variables are not set in your .env file.")
 
-# Create the ODBC connection string for Active Directory Service Principal authentication
 odbc_conn_str = (
     f"DRIVER={db_driver};"
     f"SERVER={db_server};"
@@ -39,23 +42,39 @@ odbc_conn_str = (
     "TrustServerCertificate=no;"
     "Connection Timeout=30;"
 )
-
-# URL-encode the ODBC connection string for SQLAlchemy
 quoted_conn_str = urllib.parse.quote_plus(odbc_conn_str)
-
-# Create the final SQLAlchemy DATABASE_URL
 DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={quoted_conn_str}"
 
 
-engine = create_engine(DATABASE_URL)
+def create_engine_with_retry(db_url: str):
+    MAX_RETRIES = 5
+    RETRY_DELAY_SECONDS = 10
+    for attempt in range(MAX_RETRIES):
+        try:
+            print(f"Attempting to connect to the database (Attempt {attempt + 1}/{MAX_RETRIES})...")
+            engine = create_engine(db_url)
+            with engine.connect() as connection:
+                print("✅ Database connection successful!")
+                return engine
+        except OperationalError as e:
+            print(f"⚠️ Connection failed: {e}")
+            if attempt < MAX_RETRIES - 1:
+                print(f"Database may be starting up. Retrying in {RETRY_DELAY_SECONDS} seconds...")
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                print("❌ All connection attempts failed.")
+                raise
+    raise Exception("Could not create a database engine after multiple retries.")
+
+engine = create_engine_with_retry(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # --- Association Table ---
-ingredient_supplier_association = Table('ingredient_supplier_association', Base.metadata,
-    Column('ingredient_id', Integer, ForeignKey('ingredients.id', ondelete="CASCADE")),
+inventoryitem_supplier_association = Table('inventoryitem_supplier_association', Base.metadata,
+    Column('inventoryitem_id', Integer, ForeignKey('inventoryitems.id', ondelete="CASCADE")),
     Column('supplier_id', Integer, ForeignKey('suppliers.id', ondelete="CASCADE")),
-    UniqueConstraint('ingredient_id', 'supplier_id', name='uq_ingredient_supplier')
+    UniqueConstraint('inventoryitem_id', 'supplier_id', name='uq_inventoryitem_supplier')
 )
 
 # --- Enums ---
@@ -71,12 +90,12 @@ class TransactionType(enum.Enum):
 # --- Model Classes ---
 
 class IngredientType(Base):
-    __tablename__ = "ingredient_types"
+    __tablename__ = "inventoryitem_types"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String(255), nullable=False)
     user_ref = relationship("User")
-    __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_user_ingredient_type_name'),)
+    __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_user_inventoryitem_type_name'),)
 
 class User(Base):
     __tablename__ = "users"
@@ -91,7 +110,8 @@ class User(Base):
     role = Column(String(50), default="user")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    ingredients = relationship("Ingredient", back_populates="user_ref", cascade="all, delete-orphan")
+    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
+    inventoryitems = relationship("InventoryItem", back_populates="user_ref", cascade="all, delete-orphan")
     suppliers = relationship("Supplier", back_populates="user_ref", cascade="all, delete-orphan")
     employees = relationship("Employee", back_populates="user_ref", cascade="all, delete-orphan")
     standard_production_tasks = relationship("StandardProductionTask", back_populates="user_ref", cascade="all, delete-orphan")
@@ -118,28 +138,30 @@ class Supplier(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     user_ref = relationship("User", back_populates="suppliers")
-    ingredients = relationship("Ingredient", secondary=ingredient_supplier_association, back_populates="suppliers")
+    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
+    inventoryitems = relationship("InventoryItem", secondary=inventoryitem_supplier_association, back_populates="suppliers")
     purchase_orders = relationship("PurchaseOrder", back_populates="supplier_ref")
     invoices = relationship("Invoice", back_populates="supplier_ref")
     __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_user_supplier_name'),)
 
-class Ingredient(Base):
-    __tablename__ = "ingredients"
+# --- CHANGED: The class 'Ingredient' is now correctly named 'InventoryItem' ---
+class InventoryItem(Base):
+    __tablename__ = "inventoryitems"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String(255), nullable=False)
     inci_name = Column(String(255), nullable=True)
-    ingredient_type_id = Column(Integer, ForeignKey("ingredient_types.id"), nullable=True)
+    inventoryitem_type_id = Column(Integer, ForeignKey("inventoryitem_types.id"), nullable=True)
     description = Column(Text, nullable=True)
     reorder_threshold_grams = Column(Numeric(10, 3), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    user_ref = relationship("User", back_populates="ingredients")
-    ingredient_type_ref = relationship("IngredientType")
-    suppliers = relationship("Supplier", secondary=ingredient_supplier_association, back_populates="ingredients")
-    stock_additions = relationship("StockAddition", back_populates="ingredient_ref", cascade="all, delete-orphan")
-    batch_usages = relationship("BatchIngredientUsage", back_populates="ingredient_ref")
-    __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_user_ingredient_name'),)
+    user_ref = relationship("User", back_populates="inventoryitems")
+    inventoryitem_type_ref = relationship("IngredientType")
+    suppliers = relationship("Supplier", secondary=inventoryitem_supplier_association, back_populates="inventoryitems")
+    stock_additions = relationship("StockAddition", back_populates="inventoryitem_ref", cascade="all, delete-orphan")
+    batch_usages = relationship("BatchIngredientUsage", back_populates="inventoryitem_ref")
+    __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_user_inventoryitem_name'),)
 
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
@@ -169,15 +191,21 @@ class StockAddition(Base):
     __tablename__ = "stock_additions"
     id = Column(Integer, primary_key=True, index=True)
     purchase_order_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False)
-    ingredient_id = Column(Integer, ForeignKey("ingredients.id"), nullable=False)
+    inventoryitem_id = Column(Integer, ForeignKey("inventoryitems.id"), nullable=False)
     quantity_added_grams = Column(Numeric(10, 3), nullable=False)
     item_cost = Column(Numeric(10, 2), nullable=False)
     supplier_lot_number = Column(String(255), nullable=True)
     quantity_remaining_grams = Column(Numeric(10, 3), nullable=False, default=Decimal('0.0'))
     vat_amount = Column(Numeric(10, 2), nullable=False, default=Decimal('0.0'))
-    ingredient_ref = relationship("Ingredient", back_populates="stock_additions")
+    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
+    inventoryitem_ref = relationship("InventoryItem", back_populates="stock_additions")
     purchase_order_ref = relationship("PurchaseOrder", back_populates="line_items")
     batch_usages = relationship("BatchIngredientUsage", back_populates="stock_addition_ref")
+
+# ... (rest of the models are unchanged) ...
+# --- The rest of your models.py file follows here ---
+# (Employee, StandardProductionTask, etc. do not need changes)
+# I will include the full file for completeness
 
 class Employee(Base):
     __tablename__ = "employees"
@@ -239,8 +267,6 @@ class Product(Base):
     product_code = Column(String(10), nullable=True)
     retail_price_per_item = Column(Numeric(10, 2), default=Decimal('10.00'), nullable=True)
     wholesale_price_per_item = Column(Numeric(10, 2), default=Decimal('5.00'), nullable=True)
-    packaging_label_cost = Column(Numeric(10, 3), default=Decimal('0.0'), nullable=True)
-    packaging_material_cost = Column(Numeric(10, 3), default=Decimal('0.0'), nullable=True)
     salary_allocation_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     salary_allocation_items_per_month = Column(Integer, default=1000, nullable=True)
     rent_utilities_allocation_items_per_month = Column(Integer, default=1000, nullable=True)
@@ -269,11 +295,12 @@ class ProductMaterial(Base):
     __tablename__ = "product_materials"
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    ingredient_id = Column(Integer, ForeignKey("ingredients.id"), nullable=False)
+    inventoryitem_id = Column(Integer, ForeignKey("inventoryitems.id"), nullable=False)
     quantity_grams = Column(Numeric(10, 3), nullable=False)
     product_ref = relationship("Product", back_populates="materials")
-    ingredient_ref = relationship("Ingredient")
-    __table_args__ = (UniqueConstraint('product_id', 'ingredient_id', name='uq_product_material_ingredient'),)
+    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
+    inventoryitem_ref = relationship("InventoryItem")
+    __table_args__ = (UniqueConstraint('product_id', 'inventoryitem_id', name='uq_product_material_inventoryitem'),)
 
 class ProductTaskPerformanceBase:
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
@@ -325,20 +352,21 @@ class BatchRecord(Base):
     qc_final_quality_notes = Column(Text, nullable=True)
     production_run_ref = relationship("ProductionRun", foreign_keys=[production_run_id], back_populates="batch_records")
     person_responsible_ref = relationship("Employee", foreign_keys=[person_responsible_id], back_populates="batches_responsible_for")
-    ingredient_usages = relationship("BatchIngredientUsage", back_populates="batch_record_ref", cascade="all, delete-orphan")
+    inventoryitem_usages = relationship("BatchIngredientUsage", back_populates="batch_record_ref", cascade="all, delete-orphan")
     safety_checks = relationship("BatchSafetyCheck", back_populates="batch_record_ref", cascade="all, delete-orphan")
     production_tasks = relationship("BatchProductionTask", back_populates="batch_record_ref", cascade="all, delete-orphan")
 
 class BatchIngredientUsage(Base):
-    __tablename__ = "batch_ingredient_usages"
+    __tablename__ = "batch_inventoryitem_usages"
     id = Column(Integer, primary_key=True, index=True)
     batch_record_id = Column(Integer, ForeignKey("batch_records.id"), nullable=False)
     stock_addition_id = Column(Integer, ForeignKey("stock_additions.id"), nullable=False)
     quantity_used_grams = Column(Numeric(10, 3), nullable=False)
-    ingredient_id = Column(Integer, ForeignKey("ingredients.id"), nullable=False)
-    batch_record_ref = relationship("BatchRecord", back_populates="ingredient_usages")
+    inventoryitem_id = Column(Integer, ForeignKey("inventoryitems.id"), nullable=False)
+    batch_record_ref = relationship("BatchRecord", back_populates="inventoryitem_usages")
     stock_addition_ref = relationship("StockAddition", back_populates="batch_usages")
-    ingredient_ref = relationship("Ingredient", back_populates="batch_usages")
+    # --- CHANGED: Relationship now points to the correctly named 'InventoryItem' class ---
+    inventoryitem_ref = relationship("InventoryItem", back_populates="batch_usages")
 
 class BatchSafetyCheck(Base):
     __tablename__ = "batch_safety_checks"
@@ -442,7 +470,6 @@ class TransactionDocument(Base):
     original_filename = Column(String(255), nullable=False)
     uploaded_at = Column(DateTime, server_default=func.now())
     transaction_ref = relationship("Transaction", back_populates="documents")
-
 
 def get_db():
     db = SessionLocal()

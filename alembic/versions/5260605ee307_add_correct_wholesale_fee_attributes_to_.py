@@ -31,7 +31,7 @@ def downgrade() -> None:
     op.create_table('production_run_components',
     sa.Column('id', sa.INTEGER(), autoincrement=True, nullable=False),
     sa.Column('production_run_id', sa.INTEGER(), autoincrement=False, nullable=False),
-    sa.Column('ingredient_id', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('inventoryitem_id', sa.INTEGER(), autoincrement=False, nullable=False),
     sa.Column('quantity_deducted_grams', sa.NUMERIC(precision=10, scale=3), autoincrement=False, nullable=False),
     sa.PrimaryKeyConstraint('id', name=op.f('production_run_components_pkey'))
     )

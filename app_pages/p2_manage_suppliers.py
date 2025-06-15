@@ -12,7 +12,7 @@ from models import get_db, User, Supplier
 # --- Page-specific content ---
 def render(db: Session, user: User, is_mobile: bool):
     st.header("🏢 Manage Suppliers")
-    st.write("Add, edit, or delete your ingredient and material suppliers.")
+    st.write("Add, edit, or delete your inventory item and material suppliers.")
 
     suppliers_db = db.query(Supplier).filter(Supplier.user_id == user.id).order_by(Supplier.name).all()
     
